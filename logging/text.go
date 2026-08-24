@@ -13,9 +13,9 @@ import (
 	tf "github.com/marcuspeh/trading-framework"
 )
 
-// TextLogger writes one log line per call. Each line begins with a
-// RFC3339Nano timestamp, the level, and the message. Any structured
-// fields are appended as key=value pairs.
+// TextLogger writes one line per call. Each line begins with an
+// RFC3339Nano timestamp, the level, and the message, followed by
+// key=value fields.
 type TextLogger struct {
 	mu     sync.Mutex
 	w      io.Writer
@@ -23,13 +23,10 @@ type TextLogger struct {
 	closed bool
 }
 
-// NewTextLogger returns a TextLogger that writes to w.
 func NewTextLogger(w io.Writer) *TextLogger {
 	return &TextLogger{w: w, now: time.Now}
 }
 
-// NewFileLogger returns a TextLogger that appends to path, creating it
-// if necessary.
 func NewFileLogger(path string) (*TextLogger, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -38,13 +35,8 @@ func NewFileLogger(path string) (*TextLogger, error) {
 	return NewTextLogger(f), nil
 }
 
-// Info logs an informational message.
-func (l *TextLogger) Info(msg string, fields ...any) { l.write("INFO", msg, fields) }
-
-// Warn logs a warning.
-func (l *TextLogger) Warn(msg string, fields ...any) { l.write("WARN", msg, fields) }
-
-// Error logs an error.
+func (l *TextLogger) Info(msg string, fields ...any)  { l.write("INFO", msg, fields) }
+func (l *TextLogger) Warn(msg string, fields ...any)  { l.write("WARN", msg, fields) }
 func (l *TextLogger) Error(msg string, fields ...any) { l.write("ERROR", msg, fields) }
 
 // Close releases the underlying writer when it implements io.Closer.
@@ -59,14 +51,6 @@ func (l *TextLogger) Close() error {
 		return c.Close()
 	}
 	return nil
-}
-
-// SetClock replaces the time source. Tests use this to make logs
-// deterministic.
-func (l *TextLogger) SetClock(now func() time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.now = now
 }
 
 func (l *TextLogger) write(level, msg string, fields []any) {
@@ -93,7 +77,6 @@ func (l *TextLogger) write(level, msg string, fields []any) {
 	_, _ = io.WriteString(l.w, b.String())
 }
 
-// nopLogger is provided for tests and the App's default fallback.
 type nopLogger struct{}
 
 func (nopLogger) Info(string, ...any)  {}

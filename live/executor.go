@@ -9,20 +9,18 @@ import (
 )
 
 // Executor is the framework Executor for live mode. It translates
-// broker-neutral Orders into broker-specific calls and never mutates
-// local portfolio state directly — that responsibility lives in the
-// Reconciler.
+// broker-neutral Orders into broker-specific calls. Local portfolio
+// state is owned by the Reconciler.
 type Executor struct {
 	broker BrokerClient
 }
 
-// NewExecutor constructs a live Executor wrapping the supplied broker.
 func NewExecutor(b BrokerClient) *Executor {
 	return &Executor{broker: b}
 }
 
 // Submit places a market or limit order with the broker. The returned
-// OrderResult.ID contains the broker OrderID.
+// OrderResult.ID is the broker OrderID.
 func (e *Executor) Submit(ctx context.Context, order tf.Order) (tf.OrderResult, error) {
 	if e.broker == nil {
 		return tf.OrderResult{}, fmt.Errorf("live executor: no broker client")
@@ -34,10 +32,7 @@ func (e *Executor) Submit(ctx context.Context, order tf.Order) (tf.OrderResult, 
 		return tf.OrderResult{}, fmt.Errorf("live executor: non-positive quantity")
 	}
 
-	idemKey := ""
-	if order.ID != "" {
-		idemKey = order.ID
-	}
+	idemKey := order.ID
 
 	req := MarketOrderRequest{
 		Symbol:        order.Symbol,
@@ -70,13 +65,12 @@ func (e *Executor) Submit(ctx context.Context, order tf.Order) (tf.OrderResult, 
 	}
 	return tf.OrderResult{
 		ID:        strconv.Itoa(res.OrderID),
-		Filled:    false, // Filled is reported by the broker async; the framework does not wait.
+		Filled:    false, // the broker reports fills asynchronously; the framework does not wait.
 		FillPrice: 0,
 	}, nil
 }
 
-// Positions asks the broker for current positions. Local state is not
-// used; the Reconciler writes broker truth into the MirrorPortfolio.
+// Positions asks the broker for current positions.
 func (e *Executor) Positions(ctx context.Context) ([]tf.Position, error) {
 	if e.broker == nil {
 		return nil, fmt.Errorf("live executor: no broker client")
@@ -92,7 +86,6 @@ func (e *Executor) Positions(ctx context.Context) ([]tf.Position, error) {
 	return out, nil
 }
 
-// OpenOrders returns currently-open orders as reported by the broker.
 func (e *Executor) OpenOrders(ctx context.Context) ([]tf.Order, error) {
 	if e.broker == nil {
 		return nil, fmt.Errorf("live executor: no broker client")
@@ -108,8 +101,7 @@ func (e *Executor) OpenOrders(ctx context.Context) ([]tf.Order, error) {
 	return out, nil
 }
 
-// Cancel cancels an order by broker OrderID. The orderID string from a
-// previous Submit is parsed back into an int.
+// Cancel cancels an order by broker OrderID.
 func (e *Executor) Cancel(ctx context.Context, orderID string) error {
 	if e.broker == nil {
 		return fmt.Errorf("live executor: no broker client")

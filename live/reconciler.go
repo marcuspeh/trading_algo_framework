@@ -10,15 +10,14 @@ import (
 )
 
 // Reconciler overwrites the local MirrorPortfolio with broker state.
-// IBKR is the source of truth; the framework's local view is replaced
-// on every reconciliation.
+// The broker is the source of truth; the framework's local view is
+// replaced on every reconciliation.
 type Reconciler struct {
 	broker BrokerClient
 	logger tf.Logger
 	mirror *portfolio.MirrorPortfolio
 }
 
-// NewReconciler constructs a Reconciler.
 func NewReconciler(b BrokerClient, m *portfolio.MirrorPortfolio, log tf.Logger) *Reconciler {
 	if log == nil {
 		log = nopLogger{}
@@ -26,16 +25,9 @@ func NewReconciler(b BrokerClient, m *portfolio.MirrorPortfolio, log tf.Logger) 
 	return &Reconciler{broker: b, mirror: m, logger: log}
 }
 
-// Mirror returns the portfolio the Reconciler writes to.
 func (r *Reconciler) Mirror() *portfolio.MirrorPortfolio { return r.mirror }
 
-// Reconcile fetches broker positions, open orders, and NAV and overwrites
-// the MirrorPortfolio. The returned counts are useful for tests and
-// startup logging.
-//
-// The three broker fetches run concurrently via goroutine.ErrGroup so
-// total latency is max(t1, t2, t3) rather than t1 + t2 + t3. NAV
-// failure is non-fatal; positions/open orders failures abort.
+// Result is the broker-truth snapshot written into the mirror.
 type Result struct {
 	Positions  int
 	OpenOrders int
@@ -43,7 +35,9 @@ type Result struct {
 	NAV        float64
 }
 
-// Reconcile fetches broker truth and pushes it into the mirror.
+// Reconcile fetches broker positions, open orders, and NAV and overwrites
+// the MirrorPortfolio. The three broker fetches run concurrently so
+// total latency is max(t1, t2, t3). NAV failure is non-fatal.
 func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	if r.broker == nil {
 		return Result{}, fmt.Errorf("live reconciler: no broker client")
@@ -53,11 +47,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	}
 
 	var (
-		bps []PositionResponse
-		bos []OpenOrderResponse
-		nav *AccountNAVResponse
+		bps    []PositionResponse
+		bos    []OpenOrderResponse
+		nav    *AccountNAVResponse
+		navErr error
 	)
-	navErrCh := make(chan error, 1)
 
 	g := goroutine.NewErrGroup()
 	g.Run(ctx, func() error {
@@ -71,10 +65,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		return err
 	})
 	g.Run(ctx, func() error {
-		var err error
-		nav, err = r.broker.GetAccountNAV(ctx)
-		// NAV is best-effort; capture but don't fail the group.
-		navErrCh <- err
+		nav, navErr = r.broker.GetAccountNAV(ctx)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
@@ -83,15 +74,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 
 	hasNav := false
 	navVal := 0.0
-	select {
-	case navErr := <-navErrCh:
-		if navErr == nil && nav != nil {
-			hasNav = true
-			navVal = nav.NAV
-		} else if navErr != nil {
-			r.logger.Warn("reconcile: account NAV unavailable", "err", navErr.Error())
-		}
-	default:
+	if navErr != nil {
+		r.logger.Warn("reconcile: account NAV unavailable", "err", navErr.Error())
+	} else if nav != nil {
+		hasNav = true
+		navVal = nav.NAV
 	}
 
 	positions := make([]tf.Position, 0, len(bps))

@@ -1,9 +1,7 @@
 // Package ctx provides the concrete framework Context implementation.
-//
-// The Context is the only thing strategy code interacts with. It hides
-// market data, constituents, broker, and configuration behind a single
-// interface. The interface itself lives in the root package so strategy
-// code can import it without importing this internal package.
+// Strategy code only sees the trading.Context interface (root package);
+// all market data, constituents, broker, and config dependencies live
+// behind this internal package.
 package ctx
 
 import (
@@ -16,24 +14,14 @@ import (
 	trading "github.com/marcuspeh/trading-framework"
 )
 
-// MarketDataClient is the minimal market-data dependency used by Context.
-//
-// Implementations are responsible for translating the framework's
-// (symbol, lookback, date) request into whatever the underlying client
-// supports. Lookback is the number of daily bars requested, oldest first.
 type MarketDataClient interface {
 	Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]trading.Bar, error)
 }
 
-// ConstituentsClient returns the current ETF/index constituents for an
-// as-of date. Implementations may return ErrNotFound when the universe is
-// unknown.
 type ConstituentsClient interface {
 	Constituents(ctx context.Context, etf string, asOf time.Time) ([]string, error)
 }
 
-// Portfolio is the local view of positions and cash, used by Context for
-// Position(), Positions(), Cash(), and PortfolioValue().
 type Portfolio interface {
 	Cash() float64
 	Position(symbol string) trading.Position
@@ -41,14 +29,11 @@ type Portfolio interface {
 	Value() float64
 }
 
-// Clock exposes the current simulated or live date/time.
 type Clock interface {
 	Now() time.Time
 	Date() time.Time
 }
 
-// ctx is the framework-level Context implementation. It is returned by
-// App and is the only value strategy code should hold during a Job.
 type ctx struct {
 	mode         trading.Mode
 	clock        Clock
@@ -63,7 +48,6 @@ type ctx struct {
 	barCache   map[string][]trading.Bar
 }
 
-// Options bundles the dependencies required to construct a Context.
 type Options struct {
 	Mode         trading.Mode
 	Clock        Clock
@@ -73,13 +57,11 @@ type Options struct {
 	Config       trading.Config
 	Logger       trading.Logger
 
-	// IsTradingDay is an optional override. When nil, the context uses
-	// the default weekday-only heuristic. Strategies are free to ignore
-	// it and call their own calendar logic.
+	// IsTradingDay is optional. When nil, the context uses the default
+	// weekday-only heuristic.
 	IsTradingDay func(date time.Time) bool
 }
 
-// New constructs a Context. All dependencies are required.
 func New(opts Options) (trading.Context, error) {
 	if opts.Clock == nil {
 		return nil, errMissing("clock")
@@ -118,13 +100,8 @@ func New(opts Options) (trading.Context, error) {
 	}, nil
 }
 
-func (c *ctx) Date() time.Time {
-	return c.clock.Date()
-}
-
-func (c *ctx) Now() time.Time {
-	return c.clock.Now()
-}
+func (c *ctx) Date() time.Time { return c.clock.Date() }
+func (c *ctx) Now() time.Time  { return c.clock.Now() }
 
 func (c *ctx) Bars(symbol string, lookback int) ([]trading.Bar, error) {
 	if lookback <= 0 {
@@ -141,11 +118,9 @@ func (c *ctx) Bars(symbol string, lookback int) ([]trading.Bar, error) {
 	c.barCacheMu.Unlock()
 
 	if ok && len(cached) >= lookback {
-		// In live mode the cache is invalidated by App when the date
-		// rolls forward. In backtest the simulated date monotonically
-		// advances, so the cached slice is also stale once a new date
-		// is reached. The cache is therefore only safe when the
-		// requested asOf is the same date the slice was fetched for.
+		// The cache is invalidated by the engine when the date rolls
+		// forward, so a cache hit only counts when the cache slice's
+		// last bar is on the same date as the current asOf.
 		last := cached[len(cached)-1].Time
 		if sameDate(last, asOf) {
 			return cloneBars(cached[len(cached)-lookback:]), nil
@@ -199,29 +174,14 @@ func (c *ctx) Positions() []trading.Position {
 	return out
 }
 
-func (c *ctx) Cash() float64 {
-	return c.portfolio.Cash()
-}
+func (c *ctx) Cash() float64           { return c.portfolio.Cash() }
+func (c *ctx) PortfolioValue() float64 { return c.portfolio.Value() }
+func (c *ctx) Mode() trading.Mode      { return c.mode }
+func (c *ctx) Config() trading.Config  { return c.config }
+func (c *ctx) Logger() trading.Logger  { return c.logger }
 
-func (c *ctx) PortfolioValue() float64 {
-	return c.portfolio.Value()
-}
-
-func (c *ctx) Mode() trading.Mode {
-	return c.mode
-}
-
-func (c *ctx) Config() trading.Config {
-	return c.config
-}
-
-func (c *ctx) Logger() trading.Logger {
-	return c.logger
-}
-
-// ResetBarsCache clears the per-Context bar cache. The App calls this at
-// the start of each backtest date so the next Bars() call re-fetches
-// with the new asOf date.
+// ResetBarsCache clears the per-Context bar cache. The engine calls this
+// at the start of each backtest date so the next Bars() call refetches.
 func ResetBarsCache(c trading.Context) {
 	if rc, ok := c.(interface{ resetBars() }); ok {
 		rc.resetBars()

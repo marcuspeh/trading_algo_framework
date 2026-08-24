@@ -1,12 +1,11 @@
 // Package scheduler runs registered Jobs at their scheduled TimeOfDay.
 //
-// The scheduler is intentionally simple. It does not know about trading
-// calendars, market hours, or jobs' return values. The caller supplies
-// a JobProcessor that handles order validation, risk, and execution.
+// The scheduler is intentionally simple: it knows nothing about trading
+// calendars, market hours, or jobs' return values. The caller supplies a
+// JobProcessor that handles validation, risk, and execution.
 //
-// The same scheduler is used for Backtest (deterministic step-through)
-// and Live (real-time wait) modes. The App constructs the scheduler
-// with the right Clock and calls the appropriate Run* method.
+// The same Scheduler is used for Backtest (deterministic step-through)
+// and Live (real-time wait) modes.
 package scheduler
 
 import (
@@ -20,29 +19,20 @@ import (
 	tf "github.com/marcuspeh/trading-framework"
 )
 
-// JobProcessor is the contract between the scheduler and the framework.
-// Implementations are expected to validate returned orders, run risk
-// checks, and submit them to the Executor.
 type JobProcessor interface {
 	ProcessJob(ctx tf.Context, job tf.Job, date time.Time, orders []tf.Order) error
 }
 
-// Logger is the minimal logger dependency. The framework passes its
-// own Logger; tests can pass a no-op.
 type Logger interface {
 	Info(msg string, fields ...any)
 	Warn(msg string, fields ...any)
 	Error(msg string, fields ...any)
 }
 
-// Clock exposes the current simulated or live time.
 type Clock interface {
 	Now() time.Time
 }
 
-// Scheduler holds the registered Jobs and dispatches them at the
-// scheduled time. It is safe for concurrent registration up until the
-// first call to RunBacktest or RunLive.
 type Scheduler struct {
 	mu        sync.Mutex
 	jobs      []tf.Job
@@ -50,7 +40,6 @@ type Scheduler struct {
 	log       Logger
 }
 
-// New constructs a Scheduler.
 func New(log Logger) *Scheduler {
 	if log == nil {
 		log = nopLogger{}
@@ -61,8 +50,6 @@ func New(log Logger) *Scheduler {
 	}
 }
 
-// RegisterJob adds a Job to the scheduler. Returns ErrInvalidJob if
-// validation fails and ErrDuplicateJob if Name already exists.
 func (s *Scheduler) RegisterJob(job tf.Job) error {
 	if err := job.Validate(); err != nil {
 		return err
@@ -77,8 +64,6 @@ func (s *Scheduler) RegisterJob(job tf.Job) error {
 	return nil
 }
 
-// Jobs returns a copy of the registered jobs sorted by TimeOfDay then
-// Name. Used by the backtest engine to decide the next slot.
 func (s *Scheduler) Jobs() []tf.Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,7 +81,6 @@ func (s *Scheduler) Jobs() []tf.Job {
 	return out
 }
 
-// HasJobs reports whether any jobs are registered.
 func (s *Scheduler) HasJobs() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,16 +88,7 @@ func (s *Scheduler) HasJobs() bool {
 }
 
 // RunBacktest deterministically steps through every (date, time) slot at
-// which any job is scheduled. For each slot it invokes every job whose
-// TimeOfDay matches, in name order.
-//
-// clockDate is the simulated current date (midnight, no time component).
-// clockNow is the simulated wall-clock at which the job runs. The
-// scheduler advances clockNow slot by slot but never crosses days.
-//
-// The provided tfCtx (the framework Context) is passed to each handler.
-// The handler is expected to call tfCtx.Now() / tfCtx.Date() to learn
-// the simulated time.
+// which any job is scheduled, invoking each job whose TimeOfDay matches.
 func (s *Scheduler) RunBacktest(
 	ctx context.Context,
 	proc JobProcessor,
@@ -131,8 +106,6 @@ func (s *Scheduler) RunBacktest(
 	for _, slot := range s.uniqueSlots() {
 		slotNow := atTime(clockDate, slot)
 		if slotNow.Before(clockNow) {
-			// First slot may be after the starting clockNow (e.g.
-			// start the run mid-day). Skip those.
 			continue
 		}
 		for _, job := range s.jobsAt(slot) {
@@ -147,13 +120,9 @@ func (s *Scheduler) RunBacktest(
 	return nil
 }
 
-// RunLive blocks until ctx is cancelled, firing each registered job at
-// its TimeOfDay based on the live wall clock. On each tick (driven by
-// the supplied Clock.Now()), the scheduler compares the current time
-// to the next job time and sleeps until it.
-//
-// If the current time has already passed today's slot for a job, the
-// job is fired immediately (recovery behavior for late starts).
+// RunLive blocks until ctx is cancelled, firing each job at its TimeOfDay
+// based on the live wall clock. If today's slot has already passed, the
+// scheduler fires the job immediately.
 func (s *Scheduler) RunLive(
 	ctx context.Context,
 	clock Clock,
@@ -178,7 +147,6 @@ func (s *Scheduler) RunLive(
 		now := clock.Now()
 		next, job, found := s.nextPending(now)
 		if !found {
-			// No jobs registered.
 			select {
 			case <-ctx.Done():
 				return nil
@@ -207,8 +175,6 @@ func (s *Scheduler) RunLive(
 	}
 }
 
-// invoke runs a single job, captures its returned orders, logs
-// start/end, and forwards orders through the JobProcessor.
 func (s *Scheduler) invoke(
 	proc JobProcessor,
 	tfCtx tf.Context,
@@ -267,8 +233,7 @@ func (s *Scheduler) jobsAt(slot tf.TimeOfDay) []tf.Job {
 	return out
 }
 
-// nextPending returns the earliest upcoming (job, time) pair at or after
-// `now`. If today's slot has already passed, returns tomorrow's slot.
+// nextPending returns the earliest upcoming (job, time) pair at or after now.
 func (s *Scheduler) nextPending(now time.Time) (time.Time, tf.Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,8 +266,6 @@ func (s *Scheduler) nextPending(now time.Time) (time.Time, tf.Job, bool) {
 	return first.at, first.job, true
 }
 
-// atTime returns the next instant at the given TimeOfDay on the same
-// calendar day as `ref`, in ref's location.
 func atTime(ref time.Time, tod tf.TimeOfDay) time.Time {
 	return time.Date(
 		ref.Year(), ref.Month(), ref.Day(),

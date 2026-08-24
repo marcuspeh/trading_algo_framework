@@ -7,12 +7,8 @@ import (
 	tf "github.com/marcuspeh/trading-framework"
 )
 
-// MirrorPortfolio is a read-only mirror of broker state. It is the
-// default Portfolio for Live mode.
-//
-// On every reconciliation the App calls Sync(positions, nav) to overwrite
-// local state with broker truth. The framework treats the broker as the
-// source of truth; local mirror state never persists fills directly.
+// MirrorPortfolio is a read-only mirror of broker state. The broker is
+// the source of truth; Sync overwrites local state on every reconciliation.
 type MirrorPortfolio struct {
 	mu        sync.RWMutex
 	positions map[string]tf.Position
@@ -21,17 +17,12 @@ type MirrorPortfolio struct {
 	hasNav    bool
 }
 
-// NewMirror constructs an empty MirrorPortfolio. It is populated only
-// via Sync from the broker.
 func NewMirror() *MirrorPortfolio {
 	return &MirrorPortfolio{
 		positions: map[string]tf.Position{},
 	}
 }
 
-// Sync overwrites the mirror with broker-reported positions and NAV.
-// nav is the broker-reported net account value; when zero and hasNav
-// is false, Value() computes from positions (and cash) without it.
 func (p *MirrorPortfolio) Sync(positions []tf.Position, nav float64, hasNav bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -47,14 +38,6 @@ func (p *MirrorPortfolio) Sync(positions []tf.Position, nav float64, hasNav bool
 	p.hasNav = hasNav
 }
 
-// SetCash updates the mirror's local cash view. Live mode generally
-// relies on broker NAV; this exists for tests and partial reconciliations.
-func (p *MirrorPortfolio) SetCash(cash float64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.cash = cash
-}
-
 // Cash returns the local cash view (typically 0 in live mode since
 // Value() reports broker NAV).
 func (p *MirrorPortfolio) Cash() float64 {
@@ -63,7 +46,6 @@ func (p *MirrorPortfolio) Cash() float64 {
 	return p.cash
 }
 
-// Position returns the mirror's view of the position in symbol.
 func (p *MirrorPortfolio) Position(symbol string) tf.Position {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -74,7 +56,6 @@ func (p *MirrorPortfolio) Position(symbol string) tf.Position {
 	return pos
 }
 
-// Positions returns all mirror positions sorted by symbol.
 func (p *MirrorPortfolio) Positions() []tf.Position {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -87,7 +68,7 @@ func (p *MirrorPortfolio) Positions() []tf.Position {
 }
 
 // Value returns the broker-reported NAV when available; otherwise falls
-// back to cash + sum of position cost basis (notional).
+// back to cash + sum of position cost basis.
 func (p *MirrorPortfolio) Value() float64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

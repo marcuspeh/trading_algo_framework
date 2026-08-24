@@ -11,8 +11,8 @@ import (
 	"github.com/marcuspeh/trading-framework/portfolio"
 )
 
-// Executor is the backtest Executor. It applies fills to a MemPortfolio
-// using a FillModel, and tracks open/closed orders for inspection.
+// Executor applies fills to a MemPortfolio using a FillModel, and tracks
+// open orders for inspection.
 type Executor struct {
 	mu        sync.Mutex
 	portfolio *portfolio.MemPortfolio
@@ -22,7 +22,6 @@ type Executor struct {
 	open      map[string]tf.Order
 }
 
-// NewExecutor constructs a BacktestExecutor.
 func NewExecutor(p *portfolio.MemPortfolio, f FillModel, c *Clock) *Executor {
 	if p == nil {
 		p = portfolio.NewMem(0)
@@ -42,8 +41,7 @@ func NewExecutor(p *portfolio.MemPortfolio, f FillModel, c *Clock) *Executor {
 }
 
 // Submit attempts to fill the order at the simulated current time.
-// On fill, applies the fill to the portfolio and returns a populated
-// OrderResult. Without fill, returns OrderResult with Filled=false.
+// Without fill, returns OrderResult with Filled=false.
 func (e *Executor) Submit(_ context.Context, order tf.Order) (tf.OrderResult, error) {
 	if order.Symbol == "" {
 		return tf.OrderResult{}, fmt.Errorf("backtest executor: empty symbol")
@@ -57,7 +55,6 @@ func (e *Executor) Submit(_ context.Context, order tf.Order) (tf.OrderResult, er
 
 	asOf := e.clock.Now()
 	if asOf.Hour() == 0 && asOf.Minute() == 0 && asOf.Second() == 0 {
-		// Use Date() for fills so we always pull the same-day bar.
 		asOf = e.clock.Date()
 	}
 
@@ -65,15 +62,7 @@ func (e *Executor) Submit(_ context.Context, order tf.Order) (tf.OrderResult, er
 	id := fmt.Sprintf("bt-%d", e.nextID.Add(1))
 
 	res := tf.OrderResult{ID: id}
-	if !ok {
-		// No bar data — keep the order "open" but don't apply a fill.
-		e.mu.Lock()
-		e.open[id] = order
-		e.mu.Unlock()
-		return res, nil
-	}
-	if !filled {
-		// Bar existed but order didn't trigger. Leave open.
+	if !ok || !filled {
 		e.mu.Lock()
 		e.open[id] = order
 		e.mu.Unlock()
@@ -88,13 +77,12 @@ func (e *Executor) Submit(_ context.Context, order tf.Order) (tf.OrderResult, er
 	return res, nil
 }
 
-// Positions returns the current portfolio positions.
 func (e *Executor) Positions(_ context.Context) ([]tf.Position, error) {
 	return e.portfolio.Positions(), nil
 }
 
-// OpenOrders returns a snapshot of orders that did not fill (e.g.
-// limit orders that didn't trigger, or orders on dates with no bar).
+// OpenOrders returns orders that did not fill (limits that didn't trigger,
+// or orders on dates with no bar data).
 func (e *Executor) OpenOrders(_ context.Context) ([]tf.Order, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -105,7 +93,6 @@ func (e *Executor) OpenOrders(_ context.Context) ([]tf.Order, error) {
 	return out, nil
 }
 
-// Cancel removes an open order by framework-assigned ID.
 func (e *Executor) Cancel(_ context.Context, id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -116,8 +103,6 @@ func (e *Executor) Cancel(_ context.Context, id string) error {
 	return nil
 }
 
-// Portfolio returns the underlying MemPortfolio for the engine to mark
-// prices and read state.
 func (e *Executor) Portfolio() *portfolio.MemPortfolio {
 	return e.portfolio
 }

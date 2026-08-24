@@ -1,8 +1,6 @@
 // Package portfolio provides Portfolio implementations for backtest and
-// live modes.
-//
-// The Portfolio interface lives in the root trading-framework package.
-// This package supplies concrete implementations only.
+// live modes. The Portfolio interface lives in the root trading-framework
+// package.
 package portfolio
 
 import (
@@ -13,18 +11,15 @@ import (
 	tf "github.com/marcuspeh/trading-framework"
 )
 
-// MemPortfolio is an in-memory portfolio driven by simulated fills.
-// It is the default Portfolio for Backtest mode.
-//
-// All methods are safe for concurrent use.
+// MemPortfolio is the default Portfolio for Backtest mode. Safe for
+// concurrent use.
 type MemPortfolio struct {
 	mu        sync.RWMutex
 	cash      float64
 	positions map[string]tf.Position
-	prices    map[string]float64 // last mark price per symbol
+	prices    map[string]float64
 }
 
-// NewMem constructs an in-memory portfolio seeded with starting cash.
 func NewMem(startingCash float64) *MemPortfolio {
 	return &MemPortfolio{
 		cash:      startingCash,
@@ -33,15 +28,12 @@ func NewMem(startingCash float64) *MemPortfolio {
 	}
 }
 
-// Cash returns the current available cash.
 func (p *MemPortfolio) Cash() float64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cash
 }
 
-// Position returns the current position in symbol. Zero-valued when
-// the symbol has no position.
 func (p *MemPortfolio) Position(symbol string) tf.Position {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -52,7 +44,7 @@ func (p *MemPortfolio) Position(symbol string) tf.Position {
 	return pos
 }
 
-// Positions returns all open positions sorted by symbol for determinism.
+// Positions returns open positions sorted by symbol for determinism.
 func (p *MemPortfolio) Positions() []tf.Position {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -67,8 +59,8 @@ func (p *MemPortfolio) Positions() []tf.Position {
 	return out
 }
 
-// Value returns the total portfolio value: cash + sum of (quantity *
-// last mark price). Positions without a mark price contribute zero.
+// Value returns cash + sum of (quantity * last mark price). Positions
+// without a mark price contribute zero.
 func (p *MemPortfolio) Value() float64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -83,12 +75,9 @@ func (p *MemPortfolio) Value() float64 {
 	return total
 }
 
-// ApplyFill mutates portfolio state for a single fill.
-//
-// side is Buy or Sell. quantity is always positive. price is the fill
-// price. The function updates cash and the position, computing a new
-// weighted average cost for buys that increase an existing long
-// position. Selling reduces quantity (and average cost stays the same).
+// ApplyFill mutates portfolio state for a single fill. quantity is always
+// positive. The function computes a new weighted-average cost for buys
+// that increase an existing long position.
 func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price float64) {
 	if quantity <= 0 {
 		return
@@ -98,13 +87,12 @@ func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price fl
 
 	notional := quantity * price
 	pos := p.positions[symbol]
-	pos.Symbol = symbol // ensure symbol is always set
+	pos.Symbol = symbol
 
 	switch {
 	case side == tf.Buy:
 		if pos.Quantity < 0 {
-			// Covering a short. Reduce short quantity first; any
-			// remaining opens a new long.
+			// Covering a short.
 			cover := quantity
 			if cover > -pos.Quantity {
 				cover = -pos.Quantity
@@ -156,7 +144,6 @@ func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price fl
 				p.prices[symbol] = price
 				return
 			}
-			// Remaining opens a new short.
 			pos = tf.Position{
 				Symbol:   symbol,
 				Quantity: -quantity,
@@ -166,7 +153,7 @@ func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price fl
 			p.positions[symbol] = pos
 		} else {
 			// Opening or adding to a short position.
-			newQty := pos.Quantity - quantity // more negative
+			newQty := pos.Quantity - quantity
 			totalCost := (-pos.Quantity)*pos.AvgPrice + quantity*price
 			if newQty != 0 {
 				pos.AvgPrice = totalCost / (-newQty)
@@ -180,26 +167,9 @@ func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price fl
 	p.prices[symbol] = price
 }
 
-// MarkPrice sets the latest mark price for a symbol. Used by the
-// backtest engine to compute PortfolioValue() between fills.
+// MarkPrice sets the latest mark price for a symbol.
 func (p *MemPortfolio) MarkPrice(symbol string, price float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prices[symbol] = price
-}
-
-// MarkPrices sets mark prices for many symbols at once.
-func (p *MemPortfolio) MarkPrices(prices map[string]float64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for s, px := range prices {
-		p.prices[s] = px
-	}
-}
-
-// SetCash overrides the current cash balance (used by reconciliation).
-func (p *MemPortfolio) SetCash(cash float64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.cash = cash
 }
