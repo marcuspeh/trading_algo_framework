@@ -1,0 +1,16 @@
+# Build artifacts
+/bin/
+/dist/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Local logs / outputs
+*.log
+logs/
