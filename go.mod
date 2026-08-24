@@ -11,6 +11,7 @@ require (
 require (
 	github.com/go-resty/resty/v2 v2.16.5 // indirect
 	golang.org/x/net v0.33.0 // indirect
+	golang.org/x/sync v0.11.0 // indirect
 )
 
 replace github.com/marcuspeh/live_algo/go_utils/broker => ./client/broker

@@ -6,6 +6,7 @@ package live
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	tf "github.com/marcuspeh/trading-framework"
@@ -95,7 +96,7 @@ func toFrameworkPosition(p PositionResponse) tf.Position {
 // Order type.
 func toFrameworkOpenOrder(o OpenOrderResponse) tf.Order {
 	ord := tf.Order{
-		ID:       brokerIDString(o.OrderID),
+		ID:       strconv.Itoa(o.OrderID),
 		Symbol:   o.Symbol,
 		Quantity: o.TotalQuantity,
 		Type:     tf.Market,
@@ -112,38 +113,4 @@ func toFrameworkOpenOrder(o OpenOrderResponse) tf.Order {
 		ord.Limit = &limit
 	}
 	return ord
-}
-
-func brokerIDString(id int) string {
-	return intToString(id)
-}
-
-func intToString(i int) string {
-	// Avoid pulling strconv into the hot path; reuse Sprintf.
-	return formatInt(i)
-}
-
-// formatInt is split out so it's trivial to swap for strconv later.
-func formatInt(i int) string {
-	// 21 chars fits any int64.
-	const digits = "0123456789"
-	if i == 0 {
-		return "0"
-	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = digits[i%10]
-		i /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }

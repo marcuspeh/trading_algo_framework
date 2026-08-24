@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/marcuspeh/go-tools/goroutine"
 	tf "github.com/marcuspeh/trading-framework"
 	"github.com/marcuspeh/trading-framework/portfolio"
 )
@@ -31,6 +32,10 @@ func (r *Reconciler) Mirror() *portfolio.MirrorPortfolio { return r.mirror }
 // Reconcile fetches broker positions, open orders, and NAV and overwrites
 // the MirrorPortfolio. The returned counts are useful for tests and
 // startup logging.
+//
+// The three broker fetches run concurrently via goroutine.ErrGroup so
+// total latency is max(t1, t2, t3) rather than t1 + t2 + t3. NAV
+// failure is non-fatal; positions/open orders failures abort.
 type Result struct {
 	Positions  int
 	OpenOrders int
@@ -47,43 +52,67 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("live reconciler: no mirror portfolio")
 	}
 
-	bps, err := r.broker.GetPositions(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("live reconciler: positions: %w", err)
+	var (
+		bps []PositionResponse
+		bos []OpenOrderResponse
+		nav *AccountNAVResponse
+	)
+	navErrCh := make(chan error, 1)
+
+	g := goroutine.NewErrGroup()
+	g.Run(ctx, func() error {
+		var err error
+		bps, err = r.broker.GetPositions(ctx)
+		return err
+	})
+	g.Run(ctx, func() error {
+		var err error
+		bos, err = r.broker.GetOpenOrders(ctx)
+		return err
+	})
+	g.Run(ctx, func() error {
+		var err error
+		nav, err = r.broker.GetAccountNAV(ctx)
+		// NAV is best-effort; capture but don't fail the group.
+		navErrCh <- err
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return Result{}, fmt.Errorf("live reconciler: %w", err)
 	}
+
+	hasNav := false
+	navVal := 0.0
+	select {
+	case navErr := <-navErrCh:
+		if navErr == nil && nav != nil {
+			hasNav = true
+			navVal = nav.NAV
+		} else if navErr != nil {
+			r.logger.Warn("reconcile: account NAV unavailable", "err", navErr.Error())
+		}
+	default:
+	}
+
 	positions := make([]tf.Position, 0, len(bps))
 	for _, bp := range bps {
 		positions = append(positions, toFrameworkPosition(bp))
 	}
 
-	bos, err := r.broker.GetOpenOrders(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("live reconciler: open orders: %w", err)
-	}
-
-	navResp, navErr := r.broker.GetAccountNAV(ctx)
-	hasNav := navErr == nil && navResp != nil
-	nav := 0.0
-	if hasNav {
-		nav = navResp.NAV
-	} else if navErr != nil {
-		r.logger.Warn("reconcile: account NAV unavailable", "err", navErr.Error())
-	}
-
-	r.mirror.Sync(positions, nav, hasNav)
+	r.mirror.Sync(positions, navVal, hasNav)
 
 	r.logger.Info("reconcile complete",
 		"positions", len(positions),
 		"open_orders", len(bos),
 		"has_nav", hasNav,
-		"nav", nav,
+		"nav", navVal,
 	)
 
 	return Result{
 		Positions:  len(positions),
 		OpenOrders: len(bos),
 		HasNAV:     hasNav,
-		NAV:        nav,
+		NAV:        navVal,
 	}, nil
 }
 
