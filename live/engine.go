@@ -53,6 +53,7 @@ type Config struct {
 	Logger       tf.Logger
 	IsTradingDay func(time.Time) bool
 	Risk         tf.RiskManager
+	Clock        Clock
 }
 
 // New constructs a live Engine.
