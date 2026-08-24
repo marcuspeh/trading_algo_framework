@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/marcuspeh/go-tools/util"
 	tf "github.com/marcuspeh/trading-framework"
 )
 
@@ -55,13 +56,13 @@ func (p *MemPortfolio) Position(symbol string) tf.Position {
 func (p *MemPortfolio) Positions() []tf.Position {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := make([]tf.Position, 0, len(p.positions))
+	all := make([]tf.Position, 0, len(p.positions))
 	for _, pos := range p.positions {
-		if pos.Quantity == 0 {
-			continue
-		}
-		out = append(out, pos)
+		all = append(all, pos)
 	}
+	out := util.Filter(all, func(pos tf.Position, _ int) bool {
+		return pos.Quantity != 0
+	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Symbol < out[j].Symbol })
 	return out
 }

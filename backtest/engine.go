@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/marcuspeh/go-tools/util"
 	tf "github.com/marcuspeh/trading-framework"
 	"github.com/marcuspeh/trading-framework/internal/ctx"
 	"github.com/marcuspeh/trading-framework/pipeline"
@@ -88,8 +89,8 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Fill = NewDefaultFill(cfg.BarSource)
 	}
 
-	start := startOfDay(cfg.Start)
-	end := startOfDay(cfg.End)
+	start := util.GetDay(cfg.Start)
+	end := util.GetDay(cfg.End)
 
 	clock := NewClock(start)
 	port := portfolio.NewMem(cfg.StartingCash)

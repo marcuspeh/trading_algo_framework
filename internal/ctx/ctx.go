@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcuspeh/go-tools/util"
 	trading "github.com/marcuspeh/trading-framework"
 )
 
@@ -234,9 +235,7 @@ func (c *ctx) resetBars() {
 }
 
 func cloneBars(in []trading.Bar) []trading.Bar {
-	out := make([]trading.Bar, len(in))
-	copy(out, in)
-	return out
+	return util.Copy(in)
 }
 
 func sameDate(a, b time.Time) bool {
