@@ -54,8 +54,8 @@ func (e *Executor) Submit(ctx context.Context, order tf.Order) (tf.OrderResult, 
 	case tf.Market:
 		res, err = e.broker.PlaceMarketOrder(ctx, req, idemKey)
 	case tf.Limit:
-		if order.Limit == nil {
-			return tf.OrderResult{}, fmt.Errorf("live executor: limit order missing price")
+		if order.Limit == nil || *order.Limit <= 0 {
+			return tf.OrderResult{}, fmt.Errorf("live executor: limit order requires a positive price")
 		}
 		lreq := LimitOrderRequest{MarketOrderRequest: req, LmtPrice: *order.Limit}
 		res, err = e.broker.PlaceLimitOrder(ctx, lreq, idemKey)

@@ -22,7 +22,7 @@ func NewReconciler(b BrokerClient, m *portfolio.MirrorPortfolio, log tf.Logger) 
 	if log == nil {
 		log = nopLogger{}
 	}
-	return &Reconciler{broker: b, logger: log}
+	return &Reconciler{broker: b, mirror: m, logger: log}
 }
 
 // Mirror returns the portfolio the Reconciler writes to.

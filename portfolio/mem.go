@@ -97,6 +97,7 @@ func (p *MemPortfolio) ApplyFill(symbol string, side tf.Side, quantity, price fl
 
 	notional := quantity * price
 	pos := p.positions[symbol]
+	pos.Symbol = symbol // ensure symbol is always set
 
 	switch {
 	case side == tf.Buy:
