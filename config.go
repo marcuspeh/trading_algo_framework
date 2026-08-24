@@ -10,8 +10,9 @@ type Config interface {
 	Get(key string) (string, error)
 
 	// Watch returns a typed watcher that polls the underlying config
-	// client and decodes JSON values into T.
-	Watch(key string, out any) (Watcher, error)
+	// client and decodes JSON values into T. factory is a typed
+	// factory function (see clients.Config.Watch for the signature).
+	Watch(key string, out any, factory any) (Watcher, error)
 }
 
 // Watcher exposes the latest decoded value for a watched config key.
