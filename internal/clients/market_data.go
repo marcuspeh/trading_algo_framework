@@ -13,8 +13,8 @@ import (
 	"time"
 
 	broker "github.com/marcuspeh/live_algo/go_utils/broker"
-
-	tf "github.com/marcuspeh/trading-framework"
+	"github.com/marcuspeh/trading-framework/job"
+	"github.com/marcuspeh/trading-framework/order"
 )
 
 // BrokerOHLC is the minimal subset of broker functionality the market-
@@ -43,7 +43,7 @@ func NewMarketData(c BrokerOHLC) *MarketData {
 // the broker-supplied date. lookback is capped at 1; requesting more
 // returns an error because the broker endpoint does not yet support
 // historical windows.
-func (m *MarketData) Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]tf.Bar, error) {
+func (m *MarketData) Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	if m.client == nil {
 		return nil, fmt.Errorf("market-data adapter: nil broker client")
 	}
@@ -69,7 +69,7 @@ func (m *MarketData) Bars(ctx context.Context, symbol string, lookback int, asOf
 		if perr != nil {
 			parsed = asOf
 		}
-		return []tf.Bar{{
+		return []order.Bar{{
 			Time:   parsed,
 			Open:   r.Open,
 			High:   r.High,
@@ -78,21 +78,21 @@ func (m *MarketData) Bars(ctx context.Context, symbol string, lookback int, asOf
 			Volume: int64(r.Volume),
 		}}, nil
 	}
-	return nil, tf.ErrNotFound
+	return nil, job.ErrNotFound
 }
 
 // StaticBars is an in-memory MarketDataClient used primarily by tests
 // and the example strategy. It serves pre-loaded bars by date.
 type StaticBars struct {
 	// bars maps symbol -> ascending-by-date bar list.
-	bars map[string][]tf.Bar
+	bars map[string][]order.Bar
 }
 
 // NewStaticBars constructs a StaticBars from the supplied map.
-func NewStaticBars(bars map[string][]tf.Bar) *StaticBars {
-	out := &StaticBars{bars: map[string][]tf.Bar{}}
+func NewStaticBars(bars map[string][]order.Bar) *StaticBars {
+	out := &StaticBars{bars: map[string][]order.Bar{}}
 	for s, list := range bars {
-		cp := make([]tf.Bar, len(list))
+		cp := make([]order.Bar, len(list))
 		copy(cp, list)
 		sort.SliceStable(cp, func(i, j int) bool { return cp[i].Time.Before(cp[j].Time) })
 		out.bars[s] = cp
@@ -101,13 +101,13 @@ func NewStaticBars(bars map[string][]tf.Bar) *StaticBars {
 }
 
 // Bars returns up to `lookback` bars ending on or before asOf.
-func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf time.Time) ([]tf.Bar, error) {
+func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	if lookback <= 0 {
 		return nil, fmt.Errorf("static-bars: lookback must be > 0")
 	}
 	list, ok := s.bars[symbol]
 	if !ok {
-		return nil, tf.ErrNotFound
+		return nil, job.ErrNotFound
 	}
 	// Find the last bar whose Time is <= asOf.
 	idx := sort.Search(len(list), func(i int) bool {
@@ -115,13 +115,13 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 	})
 	end := idx
 	if end == 0 {
-		return nil, tf.ErrNotFound
+		return nil, job.ErrNotFound
 	}
 	start := end - lookback
 	if start < 0 {
 		start = 0
 	}
-	out := make([]tf.Bar, end-start)
+	out := make([]order.Bar, end-start)
 	copy(out, list[start:end])
 	return out, nil
 }
@@ -129,14 +129,14 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 // StaticBarSource is a BarProvider for backtest fills backed by the
 // same data as StaticBars.
 type StaticBarSource struct {
-	bars map[string][]tf.Bar
+	bars map[string][]order.Bar
 }
 
 // NewStaticBarSource builds a StaticBarSource.
-func NewStaticBarSource(bars map[string][]tf.Bar) *StaticBarSource {
-	cp := map[string][]tf.Bar{}
+func NewStaticBarSource(bars map[string][]order.Bar) *StaticBarSource {
+	cp := map[string][]order.Bar{}
 	for s, list := range bars {
-		inner := make([]tf.Bar, len(list))
+		inner := make([]order.Bar, len(list))
 		copy(inner, list)
 		cp[s] = inner
 	}
@@ -144,17 +144,17 @@ func NewStaticBarSource(bars map[string][]tf.Bar) *StaticBarSource {
 }
 
 // Bar returns the bar for symbol on the supplied date (exact date match).
-func (s *StaticBarSource) Bar(symbol string, date time.Time) (tf.Bar, bool) {
+func (s *StaticBarSource) Bar(symbol string, date time.Time) (order.Bar, bool) {
 	list, ok := s.bars[symbol]
 	if !ok {
-		return tf.Bar{}, false
+		return order.Bar{}, false
 	}
 	for _, b := range list {
 		if sameBarDate(b.Time, date) {
 			return b, true
 		}
 	}
-	return tf.Bar{}, false
+	return order.Bar{}, false
 }
 
 func sameBarDate(a, b time.Time) bool {

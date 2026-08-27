@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	tf "github.com/marcuspeh/trading-framework"
+	"github.com/marcuspeh/trading-framework/job"
 )
 
 // TextLogger writes one line per call. Each line begins with an
@@ -84,4 +84,4 @@ func (nopLogger) Warn(string, ...any)  {}
 func (nopLogger) Error(string, ...any) {}
 
 // Nop returns a Logger that discards all output.
-func Nop() tf.Logger { return nopLogger{} }
+func Nop() job.Logger { return nopLogger{} }

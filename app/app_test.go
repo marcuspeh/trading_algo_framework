@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	tf "github.com/marcuspeh/trading-framework"
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
@@ -36,7 +35,7 @@ func noopJob(_ job.Context, _ time.Time) ([]order.Order, error) { return nil, ni
 
 func TestNewApp_NoConfigErrors(t *testing.T) {
 	a := app.NewApp()
-	a.RegisterJob(tf.Job{Name: "x", Time: tf.Time(9, 0), Handler: noopJob})
+	a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob})
 	if err := a.Run(); err == nil {
 		t.Fatal("expected error for missing config")
 	}
@@ -54,8 +53,8 @@ func TestApp_BacktestEndToEnd(t *testing.T) {
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
 	)
-	if err := a.RegisterJob(tf.Job{
-		Name: "demo", Time: tf.Time(16, 0), Handler: noopJob,
+	if err := a.RegisterJob(job.Job{
+		Name: "demo", Time: job.Time(16, 0), Handler: noopJob,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +70,7 @@ func TestApp_LiveRequiresBroker(t *testing.T) {
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
 	)
-	a.RegisterJob(tf.Job{Name: "x", Time: tf.Time(9, 0), Handler: noopJob})
+	a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob})
 	if err := a.Run(); err == nil {
 		t.Fatal("expected error for missing broker")
 	}
@@ -79,7 +78,7 @@ func TestApp_LiveRequiresBroker(t *testing.T) {
 
 func TestApp_RegisterJobRejectsBadJob(t *testing.T) {
 	a := app.NewApp()
-	if err := a.RegisterJob(tf.Job{}); err == nil {
+	if err := a.RegisterJob(job.Job{}); err == nil {
 		t.Fatal("expected validation error")
 	}
 }

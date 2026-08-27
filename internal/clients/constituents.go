@@ -7,7 +7,7 @@ import (
 
 	etf "github.com/marcuspeh/live_algo/go_utils/etf"
 
-	tf "github.com/marcuspeh/trading-framework"
+	"github.com/marcuspeh/trading-framework/job"
 )
 
 // ETFClient is the subset of etf.ETFClient functionality the constituents
@@ -79,7 +79,7 @@ func (s *StaticConstituents) Constituents(_ context.Context, etfSym string, asOf
 	}
 	byDate, ok := s.byDate[etfSym]
 	if !ok {
-		return nil, tf.ErrNotFound
+		return nil, job.ErrNotFound
 	}
 	var bestDate string
 	for d := range byDate {
@@ -95,7 +95,7 @@ func (s *StaticConstituents) Constituents(_ context.Context, etfSym string, asOf
 		}
 	}
 	if bestDate == "" {
-		return nil, tf.ErrNotFound
+		return nil, job.ErrNotFound
 	}
 	out := make([]string, len(byDate[bestDate]))
 	copy(out, byDate[bestDate])
