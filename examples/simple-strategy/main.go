@@ -20,9 +20,7 @@ import (
 	"github.com/marcuspeh/trading-framework/internal/clients"
 )
 
-// Refresher captures the universe constituents as of the current date
-// and logs them. Real strategies might refresh an internal cache here.
-func Refresher(ctx tf.Context, date time.Time) ([]tf.Order, error) {
+func refresher(ctx tf.Context, date time.Time) ([]tf.Order, error) {
 	if !ctx.IsTradingDay(date) {
 		return nil, nil
 	}
@@ -37,10 +35,7 @@ func Refresher(ctx tf.Context, date time.Time) ([]tf.Order, error) {
 	return nil, nil
 }
 
-// Rebalance is the example strategy. It checks the trading-day gate,
-// fetches constituents, looks up the latest bars, and emits a tiny
-// order list. Real strategies replace the body with their signal.
-func Rebalance(ctx tf.Context, date time.Time) ([]tf.Order, error) {
+func rebalance(ctx tf.Context, date time.Time) ([]tf.Order, error) {
 	if !ctx.IsTradingDay(date) {
 		return nil, nil
 	}
@@ -82,7 +77,6 @@ func Rebalance(ctx tf.Context, date time.Time) ([]tf.Order, error) {
 	}}, nil
 }
 
-// fakeBars builds a tiny deterministic OHLC dataset for AAPL/MSFT/NVDA.
 func fakeBars() map[string][]tf.Bar {
 	start := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
 	out := map[string][]tf.Bar{}
@@ -134,23 +128,22 @@ func main() {
 	}}
 
 	a := app.NewApp(
-		app.WithMode(tf.Backtest),
-		app.WithBacktestRange(
-			time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
-			time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
-		),
-		app.WithStartingCash(10_000),
-		app.WithMarket(market),
-		app.WithConstituents(constituents),
-		app.WithConfig(cfg),
+		app.WithBacktest(app.BacktestConfig{
+			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
+			StartingCash: 10_000,
+			BarSource:    barSrc,
+		}),
+		app.WithMarketClient(market),
+		app.WithUniverseClient(constituents),
+		app.WithConfigClient(cfg),
 		app.WithStdoutLogger(),
-		app.WithBarSource(barSrc),
 	)
 
 	if err := a.RegisterJob(tf.Job{
 		Name:    "refresh-universe",
 		Time:    tf.Time(9, 0),
-		Handler: Refresher,
+		Handler: refresher,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "register refresh-universe:", err)
 		os.Exit(1)
@@ -158,7 +151,7 @@ func main() {
 	if err := a.RegisterJob(tf.Job{
 		Name:    "rebalance",
 		Time:    tf.Time(16, 0),
-		Handler: Rebalance,
+		Handler: rebalance,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "register rebalance:", err)
 		os.Exit(1)
@@ -170,7 +163,6 @@ func main() {
 	}
 }
 
-// exampleConfig is a minimal in-memory tf.Config used only for the demo.
 type exampleConfig struct {
 	store map[string]string
 }

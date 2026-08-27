@@ -7,11 +7,18 @@ import (
 	"fmt"
 	"strings"
 
-	tf "github.com/marcuspeh/trading-framework"
+	"github.com/marcuspeh/trading-framework/job"
+	"github.com/marcuspeh/trading-framework/order"
 )
 
+// Manager validates orders returned by Jobs before they reach the
+// Executor. Strategies may swap it for custom logic.
+type Manager interface {
+	Validate(ctx job.Context, orders []order.Order) ([]order.Order, error)
+}
+
 type Reason struct {
-	Order  tf.Order
+	Order  order.Order
 	Reason string
 }
 
@@ -33,8 +40,7 @@ func (rs Reasons) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-// Basic is the default RiskManager. It rejects clearly malformed orders
-// and lets everything else through.
+// Basic is the default Manager. It rejects clearly malformed orders.
 type Basic struct{}
 
 func NewBasic() *Basic { return &Basic{} }
@@ -45,12 +51,8 @@ func NewBasic() *Basic { return &Basic{} }
 //   - Quantity must be > 0
 //   - Type must be Market or Limit
 //   - Limit orders must carry a positive Limit price
-//
-// The Basic manager does not enforce position-size or buying-power
-// limits; those are intentionally left for strategies or future risk
-// managers to add.
-func (b *Basic) Validate(_ tf.Context, orders []tf.Order) ([]tf.Order, error) {
-	kept := make([]tf.Order, 0, len(orders))
+func (b *Basic) Validate(_ job.Context, orders []order.Order) ([]order.Order, error) {
+	kept := make([]order.Order, 0, len(orders))
 	var rejected Reasons
 
 	for _, o := range orders {
@@ -59,9 +61,9 @@ func (b *Basic) Validate(_ tf.Context, orders []tf.Order) ([]tf.Order, error) {
 			rejected = append(rejected, Reason{Order: o, Reason: "empty symbol"})
 		case o.Quantity <= 0:
 			rejected = append(rejected, Reason{Order: o, Reason: "quantity must be > 0"})
-		case o.Type != tf.Market && o.Type != tf.Limit:
+		case o.Type != order.Market && o.Type != order.Limit:
 			rejected = append(rejected, Reason{Order: o, Reason: "unsupported order type"})
-		case o.Type == tf.Limit && (o.Limit == nil || *o.Limit <= 0):
+		case o.Type == order.Limit && (o.Limit == nil || *o.Limit <= 0):
 			rejected = append(rejected, Reason{Order: o, Reason: "limit orders require a positive Limit price"})
 		default:
 			kept = append(kept, o)

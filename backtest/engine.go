@@ -1,54 +1,51 @@
+// Package backtest is the backtest engine. It drives the BacktestClock
+// and the BacktestScheduler in deterministic chronological order. There
+// is no real-time waiting.
 package backtest
 
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/marcuspeh/go-tools/util"
-	tf "github.com/marcuspeh/trading-framework"
-	"github.com/marcuspeh/trading-framework/internal/ctx"
+	"github.com/marcuspeh/trading-framework/clock"
+	tfcontext "github.com/marcuspeh/trading-framework/context"
+	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/job"
+	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/pipeline"
 	"github.com/marcuspeh/trading-framework/portfolio"
+	"github.com/marcuspeh/trading-framework/risk"
 	"github.com/marcuspeh/trading-framework/scheduler"
 )
 
-type MarketDataClient interface {
-	Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]tf.Bar, error)
-}
-
-type ConstituentsClient interface {
-	Constituents(ctx context.Context, etf string, asOf time.Time) ([]string, error)
-}
-
+// Engine drives a backtest run.
 type Engine struct {
-	clock        *Clock
-	portfolio    *portfolio.MemPortfolio
-	exec         *Executor
-	market       MarketDataClient
-	constituents ConstituentsClient
-	config       tf.Config
-	logger       tf.Logger
-	scheduler    *scheduler.Scheduler
-	processor    scheduler.JobProcessor
-	isTradingDay func(time.Time) bool
+	clock     *clock.BacktestClock
+	portfolio *portfolio.Backtest
+	scheduler *scheduler.Backtest
+	market    market.Client
+	executor  execution.Executor
+	risk      risk.Manager
+	logger    job.Logger
+	handler   scheduler.Handler
 
 	start time.Time
 	end   time.Time
 }
 
+// Config configures a backtest Engine.
 type Config struct {
-	Start        time.Time
-	End          time.Time
-	StartingCash float64
-	Market       MarketDataClient
-	Constituents ConstituentsClient
-	Config       tf.Config
-	Logger       tf.Logger
-	IsTradingDay func(time.Time) bool
-	Fill         FillModel
-	BarSource    BarProvider
-	Risk         tf.RiskManager
+	Start     time.Time
+	End       time.Time
+	Market    market.Client
+	Config    job.Config
+	Logger    job.Logger
+	Portfolio *portfolio.Backtest
+	Executor  execution.Executor
+	Risk      risk.Manager
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -61,102 +58,73 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Market == nil {
 		return nil, fmt.Errorf("backtest: Market is required")
 	}
-	if cfg.Constituents == nil {
-		return nil, fmt.Errorf("backtest: Constituents is required")
+	if cfg.Portfolio == nil {
+		return nil, fmt.Errorf("backtest: Portfolio is required")
 	}
-	if cfg.Config == nil {
-		return nil, fmt.Errorf("backtest: Config is required")
+	if cfg.Executor == nil {
+		return nil, fmt.Errorf("backtest: Executor is required")
 	}
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("backtest: Logger is required")
 	}
-	if cfg.IsTradingDay == nil {
-		cfg.IsTradingDay = defaultTradingDay
-	}
-	if cfg.Fill == nil {
-		if cfg.BarSource == nil {
-			return nil, fmt.Errorf("backtest: Fill or BarSource required")
-		}
-		cfg.Fill = NewDefaultFill(cfg.BarSource)
+	if cfg.Risk == nil {
+		cfg.Risk = risk.NewBasic()
 	}
 
-	start := util.GetDay(cfg.Start)
-	end := util.GetDay(cfg.End)
-
-	clock := NewClock(start)
-	port := portfolio.NewMem(cfg.StartingCash)
-	return &Engine{
-		clock:        clock,
-		portfolio:    port,
-		exec:         NewExecutor(port, cfg.Fill, clock),
-		market:       cfg.Market,
-		constituents: cfg.Constituents,
-		config:       cfg.Config,
-		logger:       cfg.Logger,
-		isTradingDay: cfg.IsTradingDay,
-		start:        start,
-		end:          end,
-	}, nil
+	clk := clock.NewBacktest(cfg.Start)
+	e := &Engine{
+		clock:     clk,
+		portfolio: cfg.Portfolio,
+		scheduler: scheduler.NewBacktest(cfg.Logger),
+		market:    cfg.Market,
+		executor:  cfg.Executor,
+		risk:      cfg.Risk,
+		logger:    cfg.Logger,
+		start:     util.GetDay(cfg.Start),
+		end:       util.GetDay(cfg.End),
+	}
+	e.handler = pipeline.Handler(cfg.Risk, cfg.Executor, cfg.Logger)
+	return e, nil
 }
 
-func (e *Engine) RegisterJob(job tf.Job) error {
-	if e.scheduler == nil {
-		e.scheduler = scheduler.New(e.logger)
-	}
-	return e.scheduler.RegisterJob(job)
-}
+// RegisterJob registers a Job on the backtest scheduler.
+func (e *Engine) RegisterJob(j job.Job) error { return e.scheduler.Register(j) }
 
-func (e *Engine) Executor() *Executor                { return e.exec }
-func (e *Engine) Portfolio() *portfolio.MemPortfolio { return e.portfolio }
-func (e *Engine) Clock() *Clock                      { return e.clock }
-func (e *Engine) Scheduler() *scheduler.Scheduler    { return e.scheduler }
+// Clock returns the injected Clock.
+func (e *Engine) Clock() *clock.BacktestClock { return e.clock }
 
-// Run walks every calendar day in [Start, End], advances the clock, and
-// runs the scheduler's RunBacktest method.
-func (e *Engine) Run(parent context.Context) error {
-	if e.scheduler == nil {
+// Portfolio returns the simulated portfolio.
+func (e *Engine) Portfolio() *portfolio.Backtest { return e.portfolio }
+
+// Scheduler returns the backtest scheduler.
+func (e *Engine) Scheduler() *scheduler.Backtest { return e.scheduler }
+
+// Run executes the backtest. For each day in [Start, End], it advances
+// the clock and tells the scheduler to fire every Job whose TimeOfDay
+// matches the current simulated time.
+func (e *Engine) Run(parent context.Context, jc job.Context) error {
+	if !e.scheduler.HasJobs() {
 		return fmt.Errorf("backtest: no jobs registered")
 	}
 
-	tfCtx, err := ctx.New(ctx.Options{
-		Mode:         tf.Backtest,
-		Clock:        e.clock,
-		Portfolio:    e.portfolio,
-		Market:       e.market,
-		Constituents: e.constituents,
-		Config:       e.config,
-		Logger:       e.logger,
-		IsTradingDay: e.isTradingDay,
-	})
-	if err != nil {
-		return fmt.Errorf("backtest: context: %w", err)
-	}
-
-	if e.processor == nil {
-		e.processor = pipeline.New(nil, e.exec, e.logger)
-	}
-
-	cur := e.start
-	for {
+	for cur := e.start; !cur.After(e.end); cur = cur.AddDate(0, 0, 1) {
 		if err := parent.Err(); err != nil {
 			return nil
 		}
-		if cur.After(e.end) {
-			return nil
+		tfcontext.Reset(jc)
+
+		slots := uniqueSlots(e.scheduler.Jobs())
+		for _, slot := range slots {
+			at := time.Date(cur.Year(), cur.Month(), cur.Day(),
+				slot.Hour, slot.Minute, 0, 0, cur.Location())
+			e.clock.Set(at)
+			e.markToMarket(cur)
+			if err := e.scheduler.FireAt(parent, jc, e.handler, at); err != nil {
+				return err
+			}
 		}
-
-		e.clock.SetDate(cur)
-		e.clock.SetNow(time.Date(cur.Year(), cur.Month(), cur.Day(), 0, 0, 0, 0, cur.Location()))
-
-		ctx.ResetBarsCache(tfCtx)
-		e.markToMarket(cur)
-
-		if err := e.scheduler.RunBacktest(parent, e.processor, tfCtx, cur, e.clock.Now()); err != nil {
-			return err
-		}
-
-		cur = cur.AddDate(0, 0, 1)
 	}
+	return nil
 }
 
 func (e *Engine) markToMarket(date time.Time) {
@@ -169,7 +137,21 @@ func (e *Engine) markToMarket(date time.Time) {
 	}
 }
 
-func defaultTradingDay(d time.Time) bool {
-	w := d.Weekday()
-	return w != time.Saturday && w != time.Sunday
+func uniqueSlots(jobs []job.Job) []job.TimeOfDay {
+	seen := map[job.TimeOfDay]struct{}{}
+	out := []job.TimeOfDay{}
+	for _, j := range jobs {
+		if _, ok := seen[j.Time]; ok {
+			continue
+		}
+		seen[j.Time] = struct{}{}
+		out = append(out, j.Time)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Hour != out[j].Hour {
+			return out[i].Hour < out[j].Hour
+		}
+		return out[i].Minute < out[j].Minute
+	})
+	return out
 }
