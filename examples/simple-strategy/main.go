@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/app"
-	"github.com/marcuspeh/trading-framework/internal/clients"
+	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
