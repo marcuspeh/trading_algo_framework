@@ -151,7 +151,3 @@ go test ./...
 ```
 
 The framework is designed so that tests don't require external services. The example uses `clients.StaticBars` and `clients.StaticConstituents` for fakes.
-
-## Contributing
-
-Issues and PRs welcome. Keep changes focused; the framework favors small interfaces over clever abstractions.
