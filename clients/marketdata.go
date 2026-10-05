@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -69,64 +70,76 @@ type ConstituentResponse struct {
 	Source       string        `json:"source"`
 }
 
-// BrokerOHLC is the subset of BrokerClient functionality the market-
-// data adapter needs.
-type BrokerOHLC interface {
-	GetOHLC(ctx context.Context, symbols []string) ([]OHLCResponse, error)
+// MarketSource is the subset of marketdata.Client functionality the
+// market adapter needs. It mirrors the SDK's two public methods.
+type MarketSource interface {
+	GetBars(ctx context.Context, ticker string, from, to time.Time) (*marketdata.BarsResponse, error)
+	GetConstituents(ctx context.Context, symbol string, date time.Time) (*marketdata.ConstituentResponse, error)
 }
 
-// Market adapts the broker client's GetOHLC endpoint to the framework's
+// Market adapts the market-data-service SDK to the framework's
 // market.Client interface.
 //
-// The underlying endpoint returns a single OHLC bar per symbol
-// (current/latest). Historical lookback is not supported by the broker
-// client today; backtests should pre-load bars via the BarSource
-// passed to the backtest engine, not through this adapter.
+// The SDK's GetBars endpoint returns a date range; we translate the
+// (symbol, lookback, asOf) request into [from, asOf] inclusive and
+// trim to the most recent `lookback` rows.
 type Market struct {
-	client BrokerOHLC
+	client MarketSource
 }
 
-func NewMarket(c BrokerOHLC) *Market { return &Market{client: c} }
+func NewMarket(c MarketSource) *Market { return &Market{client: c} }
 
-// Bars returns a single-bar slice for the requested symbol, tagged with
-// the broker-supplied date. lookback must be 1 because the broker
-// endpoint only supports single-bar lookups.
+// Bars fetches up to `lookback` bars for symbol ending on or before asOf.
+// The SDK's GetBars range is [from, to] inclusive; we set `to` = asOf and
+// compute `from` from the lookback window.
 func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	if m.client == nil {
-		return nil, fmt.Errorf("market adapter: nil broker client")
+		return nil, fmt.Errorf("market adapter: nil market-data client")
 	}
 	if lookback <= 0 {
 		return nil, fmt.Errorf("market adapter: lookback must be > 0")
-	}
-	if lookback > 1 {
-		return nil, fmt.Errorf("market adapter: broker endpoint only supports single-bar lookups; got lookback=%d", lookback)
 	}
 	if symbol == "" {
 		return nil, fmt.Errorf("market adapter: symbol is required")
 	}
 
-	resp, err := m.client.GetOHLC(ctx, []string{symbol})
+	// Conservative from-date: the SDK doesn't filter by lookback, so
+	// over-request by `lookback` trading days and trim the result.
+	from := asOf.AddDate(0, 0, -lookback*2)
+	resp, err := m.client.GetBars(ctx, symbol, from, asOf)
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range resp {
-		if r.Symbol != symbol {
-			continue
-		}
-		parsed, perr := time.Parse("2006-01-02", r.Date)
-		if perr != nil {
-			parsed = asOf
-		}
-		return []order.Bar{{
-			Time:   parsed,
-			Open:   r.Open,
-			High:   r.High,
-			Low:    r.Low,
-			Close:  r.Close,
-			Volume: int64(r.Volume),
-		}}, nil
+	if len(resp.Bars) == 0 {
+		return nil, job.ErrNotFound
 	}
-	return nil, job.ErrNotFound
+
+	bars := make([]order.Bar, 0, len(resp.Bars))
+	for _, b := range resp.Bars {
+		bars = append(bars, order.Bar{
+			Time:   time.UnixMilli(b.Timestamp),
+			Open:   b.Open,
+			High:   b.High,
+			Low:    b.Low,
+			Close:  b.Close,
+			Volume: int64(b.Volume),
+		})
+	}
+	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Time.Before(bars[j].Time) })
+
+	// Trim to the most recent `lookback` bars at or before asOf.
+	end := len(bars)
+	for end > 0 && bars[end-1].Time.After(asOf) {
+		end--
+	}
+	if end == 0 {
+		return nil, job.ErrNotFound
+	}
+	start := end - lookback
+	if start < 0 {
+		start = 0
+	}
+	return bars[start:end], nil
 }
 
 // Universe is the subset of ETFClient functionality the constituents

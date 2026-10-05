@@ -2,7 +2,10 @@ module github.com/marcuspeh/trading-framework
 
 go 1.23.2
 
-require github.com/marcuspeh/go-tools v0.0.0-20260322035212-e79095b18af5
+require (
+	github.com/marcuspeh/go-tools v0.0.0-20260322035212-e79095b18af5
+	github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20260929150921-4786af761b14
+)
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5 // indirect
