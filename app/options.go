@@ -5,6 +5,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -18,7 +19,6 @@ import (
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
-	"github.com/marcuspeh/trading-framework/scheduler"
 	"github.com/marcuspeh/trading-framework/universe"
 )
 
@@ -34,7 +34,7 @@ type App struct {
 	mu sync.Mutex
 
 	clock      clock.Clock
-	scheduler  scheduler.Scheduler
+	btClock    *clock.BacktestClock
 	executor   execution.Executor
 	portfolio  portfolio.Portfolio
 	risk       RiskManager
@@ -70,10 +70,6 @@ type warmupEntry struct {
 // Option configures the App.
 type Option func(*App)
 
-func WithClock(c clock.Clock) Option                       { return func(a *App) { a.clock = c } }
-func WithScheduler(s scheduler.Scheduler) Option           { return func(a *App) { a.scheduler = s } }
-func WithExecutor(e execution.Executor) Option             { return func(a *App) { a.executor = e } }
-func WithPortfolio(p portfolio.Portfolio) Option           { return func(a *App) { a.portfolio = p } }
 func WithRiskManager(r RiskManager) Option                 { return func(a *App) { a.risk = r } }
 func WithMarketClient(m MarketClient) Option               { return func(a *App) { a.market = m } }
 func WithUniverseClient(u universe.Client) Option          { return func(a *App) { a.universe = u } }
@@ -111,6 +107,17 @@ type BacktestConfig struct {
 	End          time.Time
 	StartingCash float64
 	BarSource    execution.BarProvider
+
+	// SlippageBps is the adverse price movement applied to every
+	// simulated fill, in basis points (1 bp = 0.01%). Zero means
+	// frictionless fills.
+	SlippageBps float64
+
+	// Commission is charged per fill, in account currency.
+	Commission float64
+
+	// CommissionPerShare is charged per unit of quantity.
+	CommissionPerShare float64
 }
 
 // WithBacktest configures the App for backtest mode and wires up the
@@ -145,18 +152,17 @@ func NewApp(opts ...Option) *App {
 	return a
 }
 
-// RegisterJob adds a Job to the scheduler. If a convenience config
-// (backtest or live) is in use, the Job is queued and forwarded when
-// Run() builds the stack.
+// RegisterJob queues a Job. Jobs are forwarded to the engine's scheduler
+// when Run() builds the stack.
 func (a *App) RegisterJob(j job.Job) error {
 	if err := j.Validate(); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.scheduler != nil {
-		if err := a.scheduler.Register(j); err != nil {
-			return err
+	for _, existing := range a.jobs {
+		if existing.Name == j.Name {
+			return fmt.Errorf("app: duplicate job name %q", j.Name)
 		}
 	}
 	a.jobs = append(a.jobs, j)

@@ -31,22 +31,20 @@ func Handler(r risk.Manager, exec execution.Executor, log logger) scheduler.Hand
 		)
 
 		approved, err := r.Validate(jc, orders)
-		if err != nil {
-			if reasons, ok := err.(risk.Reasons); ok {
-				for _, rr := range reasons {
-					log.Warn("order rejected",
-						"job", j.Name,
-						"symbol", rr.Order.Symbol,
-						"side", rr.Order.Side.String(),
-						"reason", rr.Reason,
-					)
-				}
-			} else {
-				log.Error("risk validation error",
+		if reasons := risk.Rejected(err); len(reasons) > 0 {
+			for _, rr := range reasons {
+				log.Warn("order rejected",
 					"job", j.Name,
-					"err", err.Error(),
+					"symbol", rr.Order.Symbol,
+					"side", rr.Order.Side.String(),
+					"reason", rr.Reason,
 				)
 			}
+		} else if err != nil {
+			log.Error("risk validation error",
+				"job", j.Name,
+				"err", err.Error(),
+			)
 		}
 
 		for _, o := range approved {

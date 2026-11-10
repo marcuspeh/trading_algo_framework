@@ -17,19 +17,31 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/marcuspeh/trading-framework/broker"
 )
 
 // Broker HTTP client and request/response types.
+//
+// The request/response types live in the broker package so that this
+// client and the framework's execution package speak exactly the same
+// types. *BrokerClient therefore satisfies broker.Client and can be
+// passed directly to app.WithLive.
 
 type BrokerConfig struct {
 	BaseURL string
 	Port    int
 }
 
+// BrokerClient implements broker.Client over HTTP.
 type BrokerClient struct {
 	baseURL string
 	client  *http.Client
 }
+
+// Compile-time proof that the HTTP client satisfies the framework's
+// broker interface.
+var _ broker.Client = (*BrokerClient)(nil)
 
 func NewBrokerClient(ctx context.Context, config BrokerConfig) *BrokerClient {
 	return &BrokerClient{
@@ -78,24 +90,24 @@ func (c *BrokerClient) doRequest(ctx context.Context, method, path string, body 
 	return nil
 }
 
-func (c *BrokerClient) PlaceLimitOrder(ctx context.Context, req LimitOrderRequest, idempotencyKey string) (*OrderResponse, error) {
-	var res OrderResponse
+func (c *BrokerClient) PlaceLimitOrder(ctx context.Context, req broker.LimitOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
+	var res broker.OrderResponse
 	if err := c.doRequest(ctx, "POST", "/orders/limit", req, &res, idempotencyKey); err != nil {
 		return nil, err
 	}
 	return &res, nil
 }
 
-func (c *BrokerClient) PlaceMarketOrder(ctx context.Context, req MarketOrderRequest, idempotencyKey string) (*OrderResponse, error) {
-	var res OrderResponse
+func (c *BrokerClient) PlaceMarketOrder(ctx context.Context, req broker.MarketOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
+	var res broker.OrderResponse
 	if err := c.doRequest(ctx, "POST", "/orders/market", req, &res, idempotencyKey); err != nil {
 		return nil, err
 	}
 	return &res, nil
 }
 
-func (c *BrokerClient) PlaceBracketOrder(ctx context.Context, req BracketOrderRequest, idempotencyKey string) (*BracketOrderResponse, error) {
-	var res BracketOrderResponse
+func (c *BrokerClient) PlaceBracketOrder(ctx context.Context, req broker.BracketOrderRequest, idempotencyKey string) (*broker.BracketOrderResponse, error) {
+	var res broker.BracketOrderResponse
 	if err := c.doRequest(ctx, "POST", "/orders/bracket", req, &res, idempotencyKey); err != nil {
 		return nil, err
 	}
@@ -106,121 +118,44 @@ func (c *BrokerClient) CancelOrder(ctx context.Context, orderID int) error {
 	return c.doRequest(ctx, "DELETE", fmt.Sprintf("/orders/%d", orderID), nil, nil, "")
 }
 
-func (c *BrokerClient) UpdateOrder(ctx context.Context, orderID int, req UpdateOrderRequest) (*OrderResponse, error) {
-	var res OrderResponse
+func (c *BrokerClient) UpdateOrder(ctx context.Context, orderID int, req broker.UpdateOrderRequest) (*broker.OrderResponse, error) {
+	var res broker.OrderResponse
 	if err := c.doRequest(ctx, "PUT", fmt.Sprintf("/orders/%d", orderID), req, &res, ""); err != nil {
 		return nil, err
 	}
 	return &res, nil
 }
 
-func (c *BrokerClient) GetPositions(ctx context.Context) ([]PositionResponse, error) {
-	var res []PositionResponse
+func (c *BrokerClient) GetPositions(ctx context.Context) ([]broker.PositionResponse, error) {
+	var res []broker.PositionResponse
 	if err := c.doRequest(ctx, "GET", "/positions", nil, &res, ""); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (c *BrokerClient) GetAccountNAV(ctx context.Context) (*AccountNAVResponse, error) {
-	var res AccountNAVResponse
+func (c *BrokerClient) GetAccountNAV(ctx context.Context) (*broker.AccountNAVResponse, error) {
+	var res broker.AccountNAVResponse
 	if err := c.doRequest(ctx, "GET", "/account/nav", nil, &res, ""); err != nil {
 		return nil, err
 	}
 	return &res, nil
 }
 
-func (c *BrokerClient) GetOpenOrders(ctx context.Context) ([]OpenOrderResponse, error) {
-	var res []OpenOrderResponse
+func (c *BrokerClient) GetOpenOrders(ctx context.Context) ([]broker.OpenOrderResponse, error) {
+	var res []broker.OpenOrderResponse
 	if err := c.doRequest(ctx, "GET", "/orders/open", nil, &res, ""); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (c *BrokerClient) GetOHLC(ctx context.Context, symbols []string) ([]OHLCResponse, error) {
-	var res []OHLCResponse
+func (c *BrokerClient) GetOHLC(ctx context.Context, symbols []string) ([]broker.OHLCResponse, error) {
+	var res []broker.OHLCResponse
 	symbolsStr := strings.Join(symbols, ",")
 	path := fmt.Sprintf("/ohlc?symbols=%s", symbolsStr)
 	if err := c.doRequest(ctx, "GET", path, nil, &res, ""); err != nil {
 		return nil, err
 	}
 	return res, nil
-}
-
-type OrderRequest struct {
-	Symbol        string  `json:"symbol"`
-	Action        string  `json:"action"`
-	TotalQuantity float64 `json:"totalQuantity"`
-	OrderRef      string  `json:"orderRef,omitempty"`
-	OutsideRth    bool    `json:"outsideRth"`
-}
-
-type LimitOrderRequest struct {
-	OrderRequest
-	LmtPrice float64 `json:"lmtPrice"`
-}
-
-type MarketOrderRequest struct {
-	OrderRequest
-}
-
-type BracketOrderRequest struct {
-	OrderRequest
-	LmtPrice float64 `json:"lmtPrice"`
-	TPPrice  float64 `json:"tpPrice"`
-	SLPrice  float64 `json:"slPrice"`
-}
-
-type UpdateOrderRequest struct {
-	LmtPrice      *float64 `json:"lmtPrice,omitempty"`
-	AuxPrice      *float64 `json:"auxPrice,omitempty"`
-	TotalQuantity *float64 `json:"totalQuantity,omitempty"`
-}
-
-type OrderResponse struct {
-	PermId  int    `json:"permId"`
-	OrderId int    `json:"orderId"`
-	Status  string `json:"status"`
-}
-
-type BracketOrderResponse struct {
-	ParentPermId  int    `json:"parentPermId"`
-	ParentOrderId int    `json:"parentOrderId"`
-	Status        string `json:"status"`
-}
-
-type PositionResponse struct {
-	ConId       int     `json:"conId"`
-	Symbol      string  `json:"symbol"`
-	Quantity    float64 `json:"quantity"`
-	AverageCost float64 `json:"averageCost"`
-}
-
-type AccountNAVResponse struct {
-	Account  string  `json:"account"`
-	NAV      float64 `json:"nav"`
-	Currency string  `json:"currency"`
-}
-
-type OpenOrderResponse struct {
-	PermId        int      `json:"permId"`
-	OrderId       int      `json:"orderId"`
-	Symbol        string   `json:"symbol"`
-	Action        string   `json:"action"`
-	TotalQuantity float64  `json:"totalQuantity"`
-	LmtPrice      *float64 `json:"lmtPrice,omitempty"`
-	AuxPrice      *float64 `json:"auxPrice,omitempty"`
-	Status        string   `json:"status"`
-	Remaining     float64  `json:"remaining"`
-}
-
-type OHLCResponse struct {
-	Symbol string  `json:"symbol"`
-	Open   float64 `json:"open"`
-	High   float64 `json:"high"`
-	Low    float64 `json:"low"`
-	Close  float64 `json:"close"`
-	Volume float64 `json:"volume"`
-	Date   string  `json:"date"`
 }

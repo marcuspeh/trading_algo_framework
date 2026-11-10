@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 import (
 	"container/ring"
@@ -19,7 +19,16 @@ func NewMinMax(period int) *MinMax {
 	}
 }
 
-func (m *MinMax) Update(bar *Bar) (float64, float64) {
+// Update feeds a bar into the tracker and returns the minimum value.
+// Use UpdateMinMax to read both the minimum and the maximum.
+func (m *MinMax) Update(bar *Bar) float64 {
+	min, _ := m.UpdateMinMax(bar)
+	return min
+}
+
+// UpdateMinMax feeds a bar into the tracker and returns the minimum and
+// maximum values.
+func (m *MinMax) UpdateMinMax(bar *Bar) (float64, float64) {
 	val := bar.Close
 	m.buffer.Value = val
 	m.buffer = m.buffer.Next()
@@ -48,6 +57,13 @@ func (m *MinMax) Update(bar *Bar) (float64, float64) {
 	return m.min, m.max
 }
 
+// UpdateBands feeds a bar into the tracker and returns the minimum and
+// maximum values, so MinMax can be used with FeedBars.
+func (m *MinMax) UpdateBands(bar *Bar) (float64, float64, float64) {
+	min, max := m.UpdateMinMax(bar)
+	return min, max, max
+}
+
 func (m *MinMax) Min() float64 {
 	return m.min
 }
@@ -58,11 +74,6 @@ func (m *MinMax) Max() float64 {
 
 func (m *MinMax) IsReady() bool {
 	return m.count >= m.period
-}
-
-func (m *MinMax) UpdateIndicator(bar *Bar) float64 {
-	min, _ := m.Update(bar)
-	return min
 }
 
 func (m *MinMax) Value() float64 {

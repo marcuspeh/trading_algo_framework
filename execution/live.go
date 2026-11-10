@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/order"
 )
 
@@ -33,25 +34,25 @@ func (e *Live) Submit(ctx context.Context, o order.Order) (order.Result, error) 
 		return order.Result{}, fmt.Errorf("live executor: non-positive quantity")
 	}
 
-	req := MarketOrderRequest{
+	base := broker.OrderRequest{
 		Symbol:        o.Symbol,
 		Action:        o.Side.String(),
 		TotalQuantity: o.Quantity,
 	}
 
 	var (
-		res *OrderResponse
+		res *broker.OrderResponse
 		err error
 	)
 
 	switch o.Type {
 	case order.Market:
-		res, err = e.broker.PlaceMarketOrder(ctx, req, o.ID)
+		res, err = e.broker.PlaceMarketOrder(ctx, broker.MarketOrderRequest{OrderRequest: base}, o.ID)
 	case order.Limit:
 		if o.Limit == nil || *o.Limit <= 0 {
 			return order.Result{}, fmt.Errorf("live executor: limit order requires a positive price")
 		}
-		lreq := LimitOrderRequest{MarketOrderRequest: req, LmtPrice: *o.Limit}
+		lreq := broker.LimitOrderRequest{OrderRequest: base, LmtPrice: *o.Limit}
 		res, err = e.broker.PlaceLimitOrder(ctx, lreq, o.ID)
 	default:
 		return order.Result{}, fmt.Errorf("live executor: unsupported order type")
@@ -110,11 +111,11 @@ func (e *Live) Cancel(ctx context.Context, orderID string) error {
 	return e.broker.CancelOrder(ctx, id)
 }
 
-func toFrameworkPosition(p PositionResponse) order.Position {
+func toFrameworkPosition(p broker.PositionResponse) order.Position {
 	return order.Position{Symbol: p.Symbol, Quantity: p.Quantity, AvgPrice: p.AverageCost}
 }
 
-func toFrameworkOpenOrder(o OpenOrderResponse) order.Order {
+func toFrameworkOpenOrder(o broker.OpenOrderResponse) order.Order {
 	ord := order.Order{
 		ID:       strconv.Itoa(o.OrderID),
 		Symbol:   o.Symbol,

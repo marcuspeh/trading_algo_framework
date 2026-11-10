@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/marcuspeh/go-tools/goroutine"
+	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/order"
 	"github.com/marcuspeh/trading-framework/portfolio"
 )
@@ -49,9 +50,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	}
 
 	var (
-		bps    []PositionResponse
-		bos    []OpenOrderResponse
-		nav    *AccountNAVResponse
+		bps    []broker.PositionResponse
+		bos    []broker.OpenOrderResponse
+		nav    *broker.AccountNAVResponse
 		navErr error
 	)
 

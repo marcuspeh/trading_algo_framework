@@ -22,6 +22,14 @@ type FillModel interface {
 	Fill(order order.Order, asOf time.Time) (fillPrice float64, filled bool, ok bool)
 }
 
+// CostModel is an optional extension to FillModel for fill models that
+// charge transaction costs. When the Executor holds a FillModel that
+// implements CostModel, the returned commission is deducted from the
+// portfolio's cash on every fill.
+type CostModel interface {
+	CommissionFor(quantity float64) float64
+}
+
 // BarProvider supplies the daily bar for a symbol on a given date.
 type BarProvider interface {
 	Bar(symbol string, date time.Time) (order.Bar, bool)

@@ -43,8 +43,23 @@ func (t TimeOfDay) Validate() error {
 	return nil
 }
 
+// Mode identifies which stack the strategy is running against.
+type Mode string
+
+const (
+	// ModeBacktest means orders are simulated against historical bars.
+	ModeBacktest Mode = "backtest"
+	// ModeLive means orders are sent to a real broker.
+	ModeLive Mode = "live"
+)
+
+func (m Mode) String() string { return string(m) }
+
 // Handler is the single strategy execution abstraction.
 type Handler func(ctx Context, date time.Time) ([]order.Order, error)
+
+// JobHandler is an alias for Handler, kept for readability at call sites.
+type JobHandler = Handler
 
 // Job is a registered unit of strategy work.
 type Job struct {
@@ -58,6 +73,10 @@ type Job struct {
 type Context interface {
 	Today() time.Time
 	Now() time.Time
+	// Mode reports whether the strategy is running in backtest or live
+	// mode. The framework guarantees both stacks behave identically, so
+	// strategies rarely need it.
+	Mode() Mode
 	Bars(symbol string, lookback int) ([]order.Bar, error)
 	Constituents(etf string) ([]string, error)
 	IsTradingDay(date time.Time) bool

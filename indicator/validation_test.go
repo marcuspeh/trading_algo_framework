@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 import (
 	"bytes"
@@ -79,10 +79,26 @@ func generateRandomBars(n int) []*Bar {
 	return bars
 }
 
+// requireTalib skips the test when the Python TA-Lib reference is not
+// available on this machine. The reference implementation needs python3
+// with the pandas, numpy and ta-lib packages installed.
+func requireTalib(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("skipping: python3 is not installed")
+	}
+	cmd := exec.Command("python3", "-c", "import talib, pandas, numpy")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("skipping: python TA-Lib reference unavailable: %v (%s)", err, out)
+	}
+}
+
 func TestIndicators(t *testing.T) {
 	numIterations := 5
 	n := 200
 	tolerance := 1e-6
+
+	requireTalib(t)
 
 	for iteration := 0; iteration < numIterations; iteration++ {
 		t.Run(fmt.Sprintf("Iteration_%d", iteration), func(t *testing.T) {
@@ -266,7 +282,7 @@ func TestIndicators(t *testing.T) {
 
 				for i := range bars {
 					b := bars[i]
-					up, mid, low := bb.Update(b)
+					up, mid, low := bb.UpdateBands(b)
 					if i >= period-1 {
 						if math.Abs(up-refUpper[i].(float64)) > tolerance {
 							t.Errorf("BOL upper mismatch at %d: got %f, want %f", i, up, refUpper[i])
@@ -292,7 +308,7 @@ func TestIndicators(t *testing.T) {
 
 				for i := range bars {
 					b := bars[i]
-					min, max := mm.Update(b)
+					min, max := mm.UpdateMinMax(b)
 					if i >= period-1 {
 						if math.Abs(min-refMinList[i].(float64)) > tolerance {
 							t.Errorf("MIN mismatch at %d: got %f, want %f", i, min, refMinList[i])

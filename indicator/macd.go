@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 type MACD struct {
 	fastEMA   *EMA

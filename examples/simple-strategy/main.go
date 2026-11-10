@@ -5,6 +5,10 @@
 // and runs a backtest over a 10-day window using in-memory fake
 // market data and constituents.
 //
+// The rebalance strategy uses a 5-day simple moving average: it buys
+// when the last close is above its moving average, and sells when the
+// position is held and the close drops below it.
+//
 // Run from the repo root:
 //
 //	go run ./examples/simple-strategy
@@ -17,6 +21,8 @@ import (
 
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/config"
+	"github.com/marcuspeh/trading-framework/indicator"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -54,28 +60,51 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(bars) < 5 {
+		return nil, nil
+	}
+
+	// The indicator maths runs on the framework's bars.
+	sma := indicator.NewSMA(5)
+	smaValue := indicator.Feed(sma, target, bars)
+	last := bars[len(bars)-1].Close
 
 	ctx.Logger().Info("rebalance",
 		"date", date.Format("2006-01-02"),
 		"target", target,
 		"bars", len(bars),
+		"close", last,
+		"sma", smaValue,
 		"cash", ctx.Cash(),
 		"portfolio_value", ctx.PortfolioValue(),
 	)
 
 	pos := ctx.Position(target)
-	if pos.Quantity > 0 {
-		return nil, nil
+
+	// Price above its moving average: go long.
+	if last > smaValue {
+		if pos.Quantity > 0 {
+			return nil, nil
+		}
+		return []order.Order{{
+			Symbol:   target,
+			Side:     order.Buy,
+			Quantity: 10,
+			Type:     order.Market,
+		}}, nil
 	}
 
-	limit := bars[len(bars)-1].Close
-	return []order.Order{{
-		Symbol:   target,
-		Side:     order.Buy,
-		Quantity: 10,
-		Type:     order.Limit,
-		Limit:    &limit,
-	}}, nil
+	// Price below its moving average: close the long.
+	if pos.Quantity > 0 {
+		return []order.Order{{
+			Symbol:   target,
+			Side:     order.Sell,
+			Quantity: pos.Quantity,
+			Type:     order.Market,
+		}}, nil
+	}
+
+	return nil, nil
 }
 
 func fakeBars() map[string][]order.Bar {
@@ -123,10 +152,10 @@ func main() {
 	}
 	constituents := clients.NewStaticConstituents(constituentsByDate)
 
-	cfg := &exampleConfig{store: map[string]string{
+	cfg := config.NewMap(map[string]string{
 		"strategy":      "simple",
 		"max_positions": "5",
-	}}
+	})
 
 	a := app.NewApp(
 		app.WithBacktest(app.BacktestConfig{
@@ -134,12 +163,20 @@ func main() {
 			End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
 			StartingCash: 10_000,
 			BarSource:    barSrc,
+			SlippageBps:  5,
+			Commission:   1,
 		}),
 		app.WithMarketClient(market),
 		app.WithUniverseClient(constituents),
 		app.WithConfigClient(cfg),
 		app.WithStdoutLogger(),
 	)
+
+	// Prime the price history for AAPL before the first job runs.
+	if err := a.AddWarmup("AAPL", 5); err != nil {
+		fmt.Fprintln(os.Stderr, "warmup:", err)
+		os.Exit(1)
+	}
 
 	if err := a.RegisterJob(job.Job{
 		Name:    "refresh-universe",
@@ -162,19 +199,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "app:", err)
 		os.Exit(1)
 	}
-}
-
-type exampleConfig struct {
-	store map[string]string
-}
-
-func (c *exampleConfig) Get(key string) (string, error) {
-	if v, ok := c.store[key]; ok {
-		return v, nil
-	}
-	return "", job.ErrNotFound
-}
-
-func (c *exampleConfig) Watch(key string, out any, factory any) (job.Watcher, error) {
-	return nil, fmt.Errorf("example: Watch not supported")
 }

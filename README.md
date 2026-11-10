@@ -64,7 +64,11 @@ func main() {
 }
 ```
 
-A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy).
+A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy):
+
+```sh
+go run ./examples/simple-strategy
+```
 
 ## Concepts
 
@@ -73,21 +77,25 @@ A full runnable example lives in [`examples/simple-strategy`](examples/simple-st
 The only abstraction a strategy writes. A `Job` has a name, a `TimeOfDay`, and a handler:
 
 ```go
-type JobHandler func(ctx Context, date time.Time) ([]Order, error)
+type Handler func(ctx Context, date time.Time) ([]order.Order, error)
 ```
 
+`job.JobHandler` is an alias for `job.Handler`, if you prefer the longer name.
+
 There are no `OnDay`, `OnConstituentChange`, or lifecycle callbacks. Every strategy action is a Job.
+
+A Job fires every day at its `TimeOfDay`. To run on a subset of days, check `ctx.IsTradingDay(date)` inside the handler - the default predicate is the NYSE calendar, which excludes weekends and observed market holidays.
 
 ### Context
 
 `job.Context` is what the handler receives. It is the same shape in backtest and live:
 
 - `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`
-- `Bars(symbol string, lookback int) ([]Bar, error)`
+- `Mode() Mode` — `job.ModeBacktest` or `job.ModeLive`
+- `Bars(symbol string, lookback int) ([]order.Bar, error)`
 - `Constituents(etf string) ([]string, error)`
-- `Position(symbol) Position`, `Positions() []Position`
+- `Position(symbol) order.Position`, `Positions() []order.Position`
 - `Cash() float64`, `PortfolioValue() float64`
-- `Mode() string` ("backtest" or "live")
 - `IsTradingDay(date) bool`
 - `Logger() Logger`, `Config() Config`
 
@@ -97,29 +105,77 @@ There are no `OnDay`, `OnConstituentChange`, or lifecycle callbacks. Every strat
 |------------|---------------------------------|-----------------------------------|
 | Clock      | `clock.BacktestClock`           | `clock.RealClock`                 |
 | Scheduler  | `scheduler.Backtest` (no sleep) | `scheduler.Real` (waits wall clk) |
-| Executor   | `execution.Backtest` (sim fills)| `execution.Live` (IBKR client)    |
+| Executor   | `execution.Backtest` (sim fills)| `execution.Live` (broker client)  |
 | Portfolio  | `portfolio.Backtest`            | `portfolio.Live` (mirrors broker) |
 
 The same `Job` handler runs against any of these. No scattered `if mode == "backtest"` branching in user code.
 
 ### Live wiring
 
-Live needs an IBKR-style broker client:
+Live needs a broker client. Any implementation of `broker.Client` works - the bundled HTTP client satisfies it directly:
 
 ```go
-broker := clients.NewBrokerClient(ctx, clients.BrokerConfig{
+brokerClient := clients.NewBrokerClient(ctx, clients.BrokerConfig{
     BaseURL: "http://localhost",
     Port:    5000,
 })
+marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
+universeClient := clients.NewConstituents(clients.NewETFClient("http://localhost:8001"))
+
 a := app.NewApp(
-    app.WithLive(app.LiveConfig{Broker: broker}),
-    app.WithMarketClient(clients.NewMarket(broker)),
-    app.WithUniverseClient(clients.NewConstituents(clients.NewETFClient(""))),
+    app.WithLive(app.LiveConfig{Broker: brokerClient}),
+    app.WithMarketClient(marketClient),
+    app.WithUniverseClient(universeClient),
     app.WithConfigClient(myConfigClient),
 )
 ```
 
 `LiveConfig` defaults `Portfolio` to `portfolio.NewLive()` and runs `execution.Reconciler` on startup so the local mirror matches the broker before any Job fires.
+
+### Configuration
+
+`job.Config` is a key/value store the strategy reads through `ctx.Config()`. The `config` package provides a file-backed implementation:
+
+```go
+cfg, err := config.NewFile("strategy.conf")
+```
+
+The file format is `key = value`, one per line; `#` starts a comment. Values may be quoted.
+
+### Indicators
+
+The `indicator` package provides streaming technical-analysis indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, OBV, ROC and MinMax. They are validated against the reference TA-Lib implementation.
+
+`indicator.Feed` bridges framework bars into an indicator:
+
+```go
+sma := indicator.NewSMA(20)
+bars, _ := ctx.Bars("AAPL", 50)
+value := indicator.Feed(sma, "AAPL", bars)
+```
+
+### Transaction costs
+
+Backtest fills can model slippage and commission, so results are not unrealistically clean:
+
+```go
+app.WithBacktest(app.BacktestConfig{
+    // ...
+    SlippageBps:       5,   // 0.05% worse than the reference price
+    Commission:        1,   // flat fee per fill
+    CommissionPerShare: 0.01,
+})
+```
+
+Limit orders that do not trigger stay resting and are retried on each subsequent day until they fill or are cancelled.
+
+### Warmup
+
+`AddWarmup` prefetches history before the first Job runs, so the opening bar of the backtest is not spent on a cold fetch:
+
+```go
+a.AddWarmup("AAPL", 50)
+```
 
 ## Package layout
 
@@ -127,18 +183,21 @@ a := app.NewApp(
 trading-framework/
 ├── app/         # NewApp, options, mode stacks
 ├── backtest/    # backtest engine loop
+├── broker/      # broker.Client interface + wire types
 ├── clients/     # broker + ETF HTTP clients and adapters
 ├── clock/       # BacktestClock, RealClock
-├── context/     # Context built per-call
+├── config/      # file-backed job.Config
+├── context/     # Context implementation
 ├── examples/    # simple-strategy
 ├── execution/   # Executor interface + Backtest/Live/Reconciler
-├── job/         # Job, JobHandler, Context, TimeOfDay
+├── indicator/   # technical-analysis indicators
+├── job/         # Job, Handler, Context, TimeOfDay
 ├── live/        # live engine loop
 ├── logging/     # text logger
 ├── market/      # market.Client interface
-├── order/       # Order, Bar, Position, OrderResult
+├── order/       # Order, Bar, Position, Result
 ├── pipeline/    # log -> risk -> executor
-├── portfolio/   # Portfolio interface + Backtest/Live
+├── portfolio/   # Portfolio interface + Backtest/Live + NYSE calendar
 ├── risk/        # risk.Manager (Basic implementation)
 ├── scheduler/   # Scheduler interface + Backtest/Real
 └── universe/    # universe.Client interface
@@ -151,3 +210,5 @@ go test ./...
 ```
 
 The framework is designed so that tests don't require external services. The example uses `clients.StaticBars` and `clients.StaticConstituents` for fakes.
+
+The indicator package cross-checks its maths against Python TA-Lib. That test skips itself when `python3` with `pandas`, `numpy` and `ta-lib` is not installed.

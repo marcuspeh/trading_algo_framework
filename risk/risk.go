@@ -4,6 +4,7 @@
 package risk
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,12 @@ import (
 
 // Manager validates orders returned by Jobs before they reach the
 // Executor. Strategies may swap it for custom logic.
+//
+// Validate returns the subset of orders that passed validation. When it
+// rejects orders it also returns a non-nil error of type Reasons
+// describing each rejection, while the approved orders are still
+// returned and should still be executed. A rejection is a normal
+// outcome, not a failure of the Job.
 type Manager interface {
 	Validate(ctx job.Context, orders []order.Order) ([]order.Order, error)
 }
@@ -27,6 +34,8 @@ func (r Reason) Error() string {
 		r.Order.Symbol, r.Order.Side, r.Order.Quantity, r.Reason)
 }
 
+// Reasons lists the orders a Manager rejected, and why. It is the error
+// type returned by Validate when some orders are rejected.
 type Reasons []Reason
 
 func (rs Reasons) Error() string {
@@ -38,6 +47,20 @@ func (rs Reasons) Error() string {
 		parts[i] = r.Error()
 	}
 	return strings.Join(parts, "; ")
+}
+
+// Rejected extracts the rejection reasons from a Validate error. It
+// returns nil when err is not a Reasons error, or when no orders were
+// rejected.
+func Rejected(err error) Reasons {
+	if err == nil {
+		return nil
+	}
+	var reasons Reasons
+	if errors.As(err, &reasons) {
+		return reasons
+	}
+	return nil
 }
 
 // Basic is the default Manager. It rejects clearly malformed orders.

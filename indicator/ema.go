@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 type EMA struct {
 	period  int

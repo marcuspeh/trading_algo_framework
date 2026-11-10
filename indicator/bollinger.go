@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 import (
 	"math"
@@ -21,7 +21,16 @@ func NewBollingerBands(period int, stdDev float64) *BollingerBands {
 	}
 }
 
-func (b *BollingerBands) Update(bar *Bar) (float64, float64, float64) {
+// Update feeds a bar into the bands and returns the middle band, which
+// is the band's centre line. Use UpdateBands to read all three bands.
+func (b *BollingerBands) Update(bar *Bar) float64 {
+	_, middle, _ := b.UpdateBands(bar)
+	return middle
+}
+
+// UpdateBands feeds a bar into the bands and returns the upper, middle
+// and lower band values.
+func (b *BollingerBands) UpdateBands(bar *Bar) (float64, float64, float64) {
 	b.middle = b.sma.Update(bar)
 	if b.sma.IsReady() {
 		sumSq := 0.0
@@ -52,11 +61,6 @@ func (b *BollingerBands) Lower() float64 {
 
 func (b *BollingerBands) IsReady() bool {
 	return b.sma.IsReady()
-}
-
-func (b *BollingerBands) UpdateIndicator(bar *Bar) float64 {
-	_, middle, _ := b.Update(bar)
-	return middle
 }
 
 func (b *BollingerBands) Value() float64 {

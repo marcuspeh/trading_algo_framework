@@ -1,4 +1,4 @@
-package indicators
+package indicator
 
 type OBV struct {
 	prevClose float64

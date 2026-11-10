@@ -8,48 +8,23 @@ import (
 	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
 )
 
 // resolve wires up the convenience stacks (backtest/live) and validates
-// required dependencies for hand-wired configurations.
+// required dependencies.
 func (a *App) resolve() error {
-	if a.backtestCfg != nil {
+	switch {
+	case a.backtestCfg != nil:
 		return a.resolveBacktest()
-	}
-	if a.liveCfg != nil {
+	case a.liveCfg != nil:
 		return a.resolveLive()
+	default:
+		return fmt.Errorf("app: no mode configured (use WithBacktest or WithLive)")
 	}
-	if a.scheduler == nil {
-		return fmt.Errorf("app: no scheduler configured (use WithScheduler or WithBacktest/WithLive)")
-	}
-	if a.executor == nil {
-		return fmt.Errorf("app: no executor configured (use WithExecutor or WithBacktest/WithLive)")
-	}
-	if a.portfolio == nil {
-		return fmt.Errorf("app: no portfolio configured (use WithPortfolio or WithBacktest/WithLive)")
-	}
-	if a.market == nil {
-		return fmt.Errorf("app: no market client configured (WithMarketClient)")
-	}
-	if a.universe == nil {
-		return fmt.Errorf("app: no universe client configured (WithUniverseClient)")
-	}
-	if a.config == nil {
-		return fmt.Errorf("app: no config client configured (WithConfigClient)")
-	}
-	if a.clock == nil {
-		return fmt.Errorf("app: no clock configured (WithClock or WithBacktest/WithLive)")
-	}
-	if a.risk == nil {
-		a.risk = risk.NewBasic()
-	}
-	if len(a.jobs) == 0 {
-		return fmt.Errorf("app: no jobs registered")
-	}
-	return nil
 }
 
 func (a *App) resolveBacktest() error {
@@ -73,10 +48,16 @@ func (a *App) resolveBacktest() error {
 		return fmt.Errorf("app: backtest: config client is required (WithConfigClient)")
 	}
 
-	a.clock = clock.NewBacktest(clock.StartOfDay(cfg.Start))
+	a.btClock = clock.NewBacktest(clock.StartOfDay(cfg.Start))
+	a.clock = a.btClock
 	a.portfolio = portfolio.NewBacktest(cfg.StartingCash)
-	a.executor = execution.NewBacktest(a.portfolio.(*portfolio.Backtest),
-		execution.NewDefaultFill(cfg.BarSource), a.clock)
+	fill := &execution.DefaultFill{
+		Bars:               cfg.BarSource,
+		SlippageBps:        cfg.SlippageBps,
+		Commission:         cfg.Commission,
+		CommissionPerShare: cfg.CommissionPerShare,
+	}
+	a.executor = execution.NewBacktest(a.portfolio.(*portfolio.Backtest), fill, a.btClock)
 	if a.risk == nil {
 		a.risk = risk.NewBasic()
 	}
@@ -117,6 +98,7 @@ func (a *App) runBacktest() error {
 		Config:       a.config,
 		Logger:       a.logger,
 		IsTradingDay: a.tradingDay,
+		Mode:         job.ModeBacktest,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest context: %w", err)
@@ -130,6 +112,7 @@ func (a *App) runBacktest() error {
 		Portfolio: a.portfolio.(*portfolio.Backtest),
 		Executor:  a.executor,
 		Risk:      a.risk,
+		Clock:     a.btClock,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest engine: %w", err)
@@ -142,11 +125,38 @@ func (a *App) runBacktest() error {
 		}
 	}
 
+	if err := a.runWarmup(ctx); err != nil {
+		return fmt.Errorf("app: warmup: %w", err)
+	}
+
 	a.logger.Info("backtest start",
 		"start", a.backtestCfg.Start.Format("2006-01-02"),
 		"end", a.backtestCfg.End.Format("2006-01-02"),
 	)
 	return engine.Run(context.Background(), ctx)
+}
+
+// runWarmup prefetches the history each warmup entry asks for and primes
+// the Context's bar cache with it, so the first Job of the first day does
+// not pay for a cold fetch.
+func (a *App) runWarmup(ctx job.Context) error {
+	a.mu.Lock()
+	entries := make([]warmupEntry, len(a.warmup))
+	copy(entries, a.warmup)
+	a.mu.Unlock()
+
+	for _, w := range entries {
+		bars, err := ctx.Bars(w.Symbol, w.Lookback)
+		if err != nil {
+			return fmt.Errorf("warmup %s: %w", w.Symbol, err)
+		}
+		a.logger.Info("warmup complete",
+			"symbol", w.Symbol,
+			"lookback", w.Lookback,
+			"bars", len(bars),
+		)
+	}
+	return nil
 }
 
 func (a *App) runLive() error {
@@ -158,6 +168,7 @@ func (a *App) runLive() error {
 		Config:       a.config,
 		Logger:       a.logger,
 		IsTradingDay: a.tradingDay,
+		Mode:         job.ModeLive,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live context: %w", err)

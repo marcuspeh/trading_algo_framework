@@ -44,13 +44,15 @@ type ctx struct {
 	config     Config
 	logger     Logger
 	tradingDay TradingDayFunc
+	mode       job.Mode
 
 	barCacheMu sync.Mutex
 	barCache   map[string][]order.Bar
 }
 
 // New constructs a Context. All dependencies are required except
-// IsTradingDay (defaults to NYSEWeekdays).
+// IsTradingDay (defaults to NYSEWeekdays) and Mode (defaults to
+// ModeBacktest).
 func New(opts Options) (job.Context, error) {
 	err := opts.Validate()
 	if err != nil {
@@ -64,7 +66,8 @@ func New(opts Options) (job.Context, error) {
 		universe:   opts.Universe,
 		config:     opts.Config,
 		logger:     opts.Logger,
-		tradingDay: opts.IsTradingDay,
+		tradingDay: opts.GetIsTradingDay(),
+		mode:       opts.GetMode(),
 		barCache:   map[string][]order.Bar{},
 	}, nil
 }
@@ -75,6 +78,10 @@ func (c *ctx) Today() time.Time {
 
 func (c *ctx) Now() time.Time {
 	return c.clock.Now()
+}
+
+func (c *ctx) Mode() job.Mode {
+	return c.mode
 }
 
 func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {

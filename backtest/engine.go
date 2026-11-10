@@ -46,6 +46,11 @@ type Config struct {
 	Portfolio *portfolio.Backtest
 	Executor  execution.Executor
 	Risk      risk.Manager
+	// Clock is the simulated clock the engine advances. It must be the
+	// same instance the strategy Context and Executor were built with,
+	// otherwise the Context would observe a frozen date. When nil, the
+	// engine creates its own BacktestClock.
+	Clock *clock.BacktestClock
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -71,7 +76,10 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Risk = risk.NewBasic()
 	}
 
-	clk := clock.NewBacktest(cfg.Start)
+	clk := cfg.Clock
+	if clk == nil {
+		clk = clock.NewBacktest(cfg.Start)
+	}
 	e := &Engine{
 		clock:     clk,
 		portfolio: cfg.Portfolio,
@@ -113,6 +121,10 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		}
 		tfcontext.Reset(jc)
 
+		// Give resting orders from previous days a chance to trigger
+		// against today's bar before the day's jobs run.
+		e.advanceRestingOrders(cur)
+
 		slots := uniqueSlots(e.scheduler.Jobs())
 		for _, slot := range slots {
 			at := time.Date(cur.Year(), cur.Month(), cur.Day(),
@@ -125,6 +137,17 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		}
 	}
 	return nil
+}
+
+// advanceRestingOrders retries unfilled orders against the given day's
+// bar, so limit orders are good-till-cancelled rather than expiring on
+// the day they were submitted.
+func (e *Engine) advanceRestingOrders(date time.Time) {
+	bt, ok := e.executor.(*execution.Backtest)
+	if !ok {
+		return
+	}
+	bt.AdvanceDay(date)
 }
 
 func (e *Engine) markToMarket(date time.Time) {

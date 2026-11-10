@@ -156,3 +156,13 @@ func (p *Backtest) MarkPrice(symbol string, price float64) {
 	defer p.mu.Unlock()
 	p.prices[symbol] = price
 }
+
+// ChargeFee deducts a transaction cost from cash.
+func (p *Backtest) ChargeFee(fee float64) {
+	if fee <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cash -= fee
+}

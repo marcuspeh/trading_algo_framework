@@ -126,3 +126,64 @@ func TestContext_MissingDepsRejected(t *testing.T) {
 		t.Fatal("expected error for missing deps")
 	}
 }
+
+// TestContext_DefaultTradingDayFuncDoesNotPanic verifies that omitting
+// IsTradingDay falls back to the weekday calendar instead of panicking
+// on a nil function call.
+func TestContext_DefaultTradingDayFuncDoesNotPanic(t *testing.T) {
+	c, err := tfcontext.New(tfcontext.Options{
+		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+		Portfolio: fakePortfolio{},
+		Market:    &fakeMarket{},
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2024-01-02 is a Tuesday, 2024-01-06 a Saturday.
+	if !c.IsTradingDay(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Error("expected Tuesday to be a trading day")
+	}
+	if c.IsTradingDay(time.Date(2024, 1, 6, 0, 0, 0, 0, time.UTC)) {
+		t.Error("expected Saturday to not be a trading day")
+	}
+}
+
+// TestContext_ModeDefaultsToBacktest verifies the mode default.
+func TestContext_ModeDefaultsToBacktest(t *testing.T) {
+	c, err := tfcontext.New(tfcontext.Options{
+		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+		Portfolio: fakePortfolio{},
+		Market:    &fakeMarket{},
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Mode(); got != job.ModeBacktest {
+		t.Fatalf("Mode()=%q want %q", got, job.ModeBacktest)
+	}
+}
+
+// TestContext_ExplicitModeIsUsed verifies an explicit mode wins.
+func TestContext_ExplicitModeIsUsed(t *testing.T) {
+	c, err := tfcontext.New(tfcontext.Options{
+		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+		Portfolio: fakePortfolio{},
+		Market:    &fakeMarket{},
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+		Mode:      job.ModeLive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Mode(); got != job.ModeLive {
+		t.Fatalf("Mode()=%q want %q", got, job.ModeLive)
+	}
+}
