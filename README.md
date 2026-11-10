@@ -144,14 +144,20 @@ The file format is `key = value`, one per line; `#` starts a comment. Values may
 
 ### Indicators
 
-The `indicator` package provides streaming technical-analysis indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, OBV, ROC and MinMax. They are validated against the reference TA-Lib implementation.
+Technical-analysis indicators live in their own library, [indicators-go](https://github.com/marcuspeh/indicators-go), which this framework depends on: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, OBV, ROC and MinMax. They are validated against the reference TA-Lib implementation.
 
-`indicator.Feed` bridges framework bars into an indicator:
+The framework's `indicator` package adapts the library to the framework's bar type and provides convenience helpers:
 
 ```go
 sma := indicator.NewSMA(20)
 bars, _ := ctx.Bars("AAPL", 50)
 value := indicator.Feed(sma, "AAPL", bars)
+```
+
+You can also import the library directly:
+
+```go
+import indicators "github.com/marcuspeh/indicators-go"
 ```
 
 ### Transaction costs
@@ -190,7 +196,7 @@ trading-framework/
 ├── context/     # Context implementation
 ├── examples/    # simple-strategy
 ├── execution/   # Executor interface + Backtest/Live/Reconciler
-├── indicator/   # technical-analysis indicators
+├── indicator/   # adapter for the indicators-go library
 ├── job/         # Job, Handler, Context, TimeOfDay
 ├── live/        # live engine loop
 ├── logging/     # text logger
@@ -211,4 +217,4 @@ go test ./...
 
 The framework is designed so that tests don't require external services. The example uses `clients.StaticBars` and `clients.StaticConstituents` for fakes.
 
-The indicator package cross-checks its maths against Python TA-Lib. That test skips itself when `python3` with `pandas`, `numpy` and `ta-lib` is not installed.
+The indicators-go library cross-checks its maths against Python TA-Lib in its own test suite. That test skips itself when `python3` with `pandas`, `numpy` and `ta-lib` is not installed.

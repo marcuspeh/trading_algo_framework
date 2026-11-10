@@ -4,6 +4,7 @@ go 1.23.2
 
 require (
 	github.com/marcuspeh/go-tools v0.0.0-20260322035212-e79095b18af5
+	github.com/marcuspeh/indicators-go v0.0.0-20260830162248-a9470b0a6c0a
 	github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20260929150921-4786af761b14
 )
 
