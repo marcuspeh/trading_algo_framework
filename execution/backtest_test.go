@@ -28,7 +28,7 @@ func TestBacktestExecutor_MarketOrderFillsAtClose(t *testing.T) {
 	clk := clock.NewBacktest(time.Date(2024, 1, 2, 9, 30, 0, 0, time.UTC))
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
-		"AAPL": {"2024-01-02": {Time: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Close: 100}},
+		"AAPL": {"2024-01-02": {Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Close: 100}},
 	}}
 	exec := execution.NewBacktest(p, execution.NewDefaultFill(bars), clk)
 
@@ -54,8 +54,8 @@ func TestBacktestExecutor_LimitTriggersBelowLow(t *testing.T) {
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
 		"AAPL": {"2024-01-02": {
-			Time: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
-			Open: 110, High: 115, Low: 95, Close: 105,
+			Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			Open:      110, High: 115, Low: 95, Close: 105,
 		}},
 	}}
 	exec := execution.NewBacktest(p, execution.NewDefaultFill(bars), clk)
@@ -77,8 +77,8 @@ func TestBacktestExecutor_LimitNoTriggerStaysOpen(t *testing.T) {
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
 		"AAPL": {"2024-01-02": {
-			Time: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
-			Open: 200, High: 210, Low: 195, Close: 205,
+			Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			Open:      200, High: 210, Low: 195, Close: 205,
 		}},
 	}}
 	exec := execution.NewBacktest(p, execution.NewDefaultFill(bars), clk)

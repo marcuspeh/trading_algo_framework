@@ -99,6 +99,11 @@ A Job fires every day at its `TimeOfDay`. To run on a subset of days, check `ctx
 - `IsTradingDay(date) bool`
 - `Logger() Logger`, `Config() Config`
 
+`order.Bar` is an alias of the bar type from
+[indicators-go](https://github.com/marcuspeh/indicators-go), so it carries
+a `Symbol`, a `Timestamp`, OHLC prices and a `Volume`, and can be passed
+to the indicator library as-is.
+
 ### Mode-specific implementations
 
 | Component  | Backtest                        | Live                              |
@@ -146,18 +151,17 @@ The file format is `key = value`, one per line; `#` starts a comment. Values may
 
 Technical-analysis indicators live in their own library, [indicators-go](https://github.com/marcuspeh/indicators-go), which this framework depends on: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, OBV, ROC and MinMax. They are validated against the reference TA-Lib implementation.
 
-The framework's `indicator` package adapts the library to the framework's bar type and provides convenience helpers:
-
-```go
-sma := indicator.NewSMA(20)
-bars, _ := ctx.Bars("AAPL", 50)
-value := indicator.Feed(sma, "AAPL", bars)
-```
-
-You can also import the library directly:
+`order.Bar` is an alias of that library's `Bar`, so bars go straight into an indicator with no conversion:
 
 ```go
 import indicators "github.com/marcuspeh/indicators-go"
+
+sma := indicators.NewSMA(20)
+bars, _ := ctx.Bars("AAPL", 50)
+for i := range bars {
+    sma.Update(&bars[i])
+}
+value := sma.Value()
 ```
 
 ### Transaction costs
@@ -196,7 +200,6 @@ trading-framework/
 ├── context/     # Context implementation
 ├── examples/    # simple-strategy
 ├── execution/   # Executor interface + Backtest/Live/Reconciler
-├── indicator/   # adapter for the indicators-go library
 ├── job/         # Job, Handler, Context, TimeOfDay
 ├── live/        # live engine loop
 ├── logging/     # text logger

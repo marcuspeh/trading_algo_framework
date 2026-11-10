@@ -66,9 +66,9 @@ func TestBacktest_OrderFillsAgainstCurrentDayBar(t *testing.T) {
 
 	bars := map[string][]order.Bar{
 		"AAPL": {
-			{Time: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Open: 100, High: 100, Low: 100, Close: 100},
-			{Time: time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), Open: 200, High: 200, Low: 200, Close: 200},
-			{Time: time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC), Open: 300, High: 300, Low: 300, Close: 300},
+			{Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Open: 100, High: 100, Low: 100, Close: 100},
+			{Timestamp: time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), Open: 200, High: 200, Low: 200, Close: 200},
+			{Timestamp: time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC), Open: 300, High: 300, Low: 300, Close: 300},
 		},
 	}
 

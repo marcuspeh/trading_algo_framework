@@ -117,19 +117,20 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 	bars := make([]order.Bar, 0, len(resp.Bars))
 	for _, b := range resp.Bars {
 		bars = append(bars, order.Bar{
-			Time:   time.UnixMilli(b.Timestamp),
-			Open:   b.Open,
-			High:   b.High,
-			Low:    b.Low,
-			Close:  b.Close,
-			Volume: int64(b.Volume),
+			Symbol:    symbol,
+			Timestamp: time.UnixMilli(b.Timestamp),
+			Open:      b.Open,
+			High:      b.High,
+			Low:       b.Low,
+			Close:     b.Close,
+			Volume:    b.Volume,
 		})
 	}
-	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Time.Before(bars[j].Time) })
+	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Timestamp.Before(bars[j].Timestamp) })
 
 	// Trim to the most recent `lookback` bars at or before asOf.
 	end := len(bars)
-	for end > 0 && bars[end-1].Time.After(asOf) {
+	for end > 0 && bars[end-1].Timestamp.After(asOf) {
 		end--
 	}
 	if end == 0 {
@@ -189,7 +190,7 @@ func NewStaticBars(bars map[string][]order.Bar) *StaticBars {
 	for s, list := range bars {
 		cp := make([]order.Bar, len(list))
 		copy(cp, list)
-		sort.SliceStable(cp, func(i, j int) bool { return cp[i].Time.Before(cp[j].Time) })
+		sort.SliceStable(cp, func(i, j int) bool { return cp[i].Timestamp.Before(cp[j].Timestamp) })
 		out.bars[s] = cp
 	}
 	return out
@@ -205,7 +206,7 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 		return nil, job.ErrNotFound
 	}
 	idx := sort.Search(len(list), func(i int) bool {
-		return list[i].Time.After(asOf)
+		return list[i].Timestamp.After(asOf)
 	})
 	end := idx
 	if end == 0 {
@@ -243,7 +244,7 @@ func (s *StaticBarSource) Bar(symbol string, date time.Time) (order.Bar, bool) {
 		return order.Bar{}, false
 	}
 	for _, b := range list {
-		if sameBarDate(b.Time, date) {
+		if sameBarDate(b.Timestamp, date) {
 			return b, true
 		}
 	}

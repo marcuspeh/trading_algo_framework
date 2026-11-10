@@ -19,10 +19,10 @@ import (
 	"os"
 	"time"
 
+	indicators "github.com/marcuspeh/indicators-go"
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/config"
-	"github.com/marcuspeh/trading-framework/indicator"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -64,9 +64,13 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 		return nil, nil
 	}
 
-	// The indicator maths runs on the framework's bars.
-	sma := indicator.NewSMA(5)
-	smaValue := indicator.Feed(sma, target, bars)
+	// The indicator maths runs on the framework's bars. order.Bar is the
+	// library's bar type, so it feeds straight in.
+	sma := indicators.NewSMA(5)
+	var smaValue float64
+	for i := range bars {
+		smaValue = sma.Update(&bars[i])
+	}
 	last := bars[len(bars)-1].Close
 
 	ctx.Logger().Info("rebalance",
@@ -127,12 +131,13 @@ func fakeBars() map[string][]order.Bar {
 			high := close + 1.0
 			low := open - 0.5
 			bars = append(bars, order.Bar{
-				Time:   date,
-				Open:   open,
-				High:   high,
-				Low:    low,
-				Close:  close,
-				Volume: 1_000_000,
+				Symbol:    sym,
+				Timestamp: date,
+				Open:      open,
+				High:      high,
+				Low:       low,
+				Close:     close,
+				Volume:    1_000_000,
 			})
 		}
 		out[sym] = bars

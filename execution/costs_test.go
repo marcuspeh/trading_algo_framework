@@ -25,7 +25,7 @@ func TestDefaultFill_SlippageMovesPriceAgainstTrader(t *testing.T) {
 	clk := clockAt(2024, 1, 2)
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
-		"AAPL": {"2024-01-02": {Time: day(2024, 1, 2), Close: 100}},
+		"AAPL": {"2024-01-02": {Timestamp: day(2024, 1, 2), Close: 100}},
 	}}
 	// 10 bps = 0.1%.
 	fill := &execution.DefaultFill{Bars: bars, SlippageBps: 10}
@@ -59,7 +59,7 @@ func TestDefaultFill_LimitOrderNeverFillsPastLimit(t *testing.T) {
 	clk := clockAt(2024, 1, 2)
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
-		"AAPL": {"2024-01-02": {Time: day(2024, 1, 2), Open: 100, High: 105, Low: 95, Close: 100}},
+		"AAPL": {"2024-01-02": {Timestamp: day(2024, 1, 2), Open: 100, High: 105, Low: 95, Close: 100}},
 	}}
 	// 100 bps of slippage would push a limit buy of 100 up to 101, but
 	// a limit order must never fill above its limit.
@@ -85,7 +85,7 @@ func TestDefaultFill_CommissionIsCharged(t *testing.T) {
 	clk := clockAt(2024, 1, 2)
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
-		"AAPL": {"2024-01-02": {Time: day(2024, 1, 2), Close: 100}},
+		"AAPL": {"2024-01-02": {Timestamp: day(2024, 1, 2), Close: 100}},
 	}}
 	fill := &execution.DefaultFill{Bars: bars, Commission: 5, CommissionPerShare: 0.01}
 	exec := execution.NewBacktest(p, fill, clk)
@@ -107,8 +107,8 @@ func TestBacktestExecutor_RestingLimitOrderFillsOnLaterDay(t *testing.T) {
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
 		"AAPL": {
-			"2024-01-02": {Time: day(2024, 1, 2), Open: 200, High: 210, Low: 195, Close: 205},
-			"2024-01-03": {Time: day(2024, 1, 3), Open: 90, High: 95, Low: 85, Close: 90},
+			"2024-01-02": {Timestamp: day(2024, 1, 2), Open: 200, High: 210, Low: 195, Close: 205},
+			"2024-01-03": {Timestamp: day(2024, 1, 3), Open: 90, High: 95, Low: 85, Close: 90},
 		},
 	}}
 	exec := execution.NewBacktest(p, execution.NewDefaultFill(bars), clk)
@@ -144,8 +144,8 @@ func TestBacktestExecutor_RestingOrderStaysOpenWhenNotTriggered(t *testing.T) {
 	p := portfolio.NewBacktest(10_000)
 	bars := &staticBars{byDate: map[string]map[string]order.Bar{
 		"AAPL": {
-			"2024-01-02": {Time: day(2024, 1, 2), Open: 200, High: 210, Low: 195, Close: 205},
-			"2024-01-03": {Time: day(2024, 1, 3), Open: 200, High: 210, Low: 195, Close: 205},
+			"2024-01-02": {Timestamp: day(2024, 1, 2), Open: 200, High: 210, Low: 195, Close: 205},
+			"2024-01-03": {Timestamp: day(2024, 1, 3), Open: 200, High: 210, Low: 195, Close: 205},
 		},
 	}}
 	exec := execution.NewBacktest(p, execution.NewDefaultFill(bars), clk)

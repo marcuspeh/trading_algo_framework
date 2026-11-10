@@ -99,7 +99,7 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	c.barCacheMu.Unlock()
 
 	if ok && len(cached) >= lookback {
-		last := cached[len(cached)-1].Time
+		last := cached[len(cached)-1].Timestamp
 		if sameDate(last, asOf) {
 			return cloneBars(cached[len(cached)-lookback:]), nil
 		}
@@ -111,7 +111,7 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	}
 
 	sort.SliceStable(bars, func(i, j int) bool {
-		return bars[i].Time.Before(bars[j].Time)
+		return bars[i].Timestamp.Before(bars[j].Timestamp)
 	})
 
 	c.barCacheMu.Lock()

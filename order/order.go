@@ -1,6 +1,8 @@
 package order
 
-import "time"
+import (
+	indicator "github.com/marcuspeh/indicators-go"
+)
 
 type Side int
 
@@ -45,14 +47,12 @@ type Position struct {
 	AvgPrice float64
 }
 
-type Bar struct {
-	Time   time.Time
-	Open   float64
-	High   float64
-	Low    float64
-	Close  float64
-	Volume int64
-}
+// Bar is a daily OHLCV bar.
+//
+// It is an alias of the bar type from github.com/marcuspeh/indicators-go,
+// so bars can be handed straight to the indicator library without any
+// conversion.
+type Bar = indicator.Bar
 
 type Result struct {
 	ID        string
