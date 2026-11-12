@@ -47,7 +47,19 @@ type ctx struct {
 	mode       job.Mode
 
 	barCacheMu sync.Mutex
-	barCache   map[string][]order.Bar
+	barCache   map[string]barCacheEntry
+}
+
+// barCacheEntry holds the bars fetched for one symbol, along with the
+// date they were fetched for.
+//
+// The date is recorded explicitly because the newest bar is dated by
+// its trading day, which is often earlier than the day the fetch was
+// made - a fetch made on a Monday returns Friday's bar - so it cannot
+// stand in for "these bars were fetched for this day".
+type barCacheEntry struct {
+	asOf time.Time
+	bars []order.Bar
 }
 
 // New constructs a Context. All dependencies are required except
@@ -68,7 +80,7 @@ func New(opts Options) (job.Context, error) {
 		logger:     opts.Logger,
 		tradingDay: opts.GetIsTradingDay(),
 		mode:       opts.GetMode(),
-		barCache:   map[string][]order.Bar{},
+		barCache:   map[string]barCacheEntry{},
 	}, nil
 }
 
@@ -98,11 +110,12 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	cached, ok := c.barCache[symbol]
 	c.barCacheMu.Unlock()
 
-	if ok && len(cached) >= lookback {
-		last := cached[len(cached)-1].Timestamp
-		if sameDate(last, asOf) {
-			return cloneBars(cached[len(cached)-lookback:]), nil
-		}
+	// A cached entry is reusable when it was fetched for the same day
+	// and holds at least as many bars as were asked for. Anything else
+	// - a different day, or a shorter history than requested - needs a
+	// fresh fetch.
+	if ok && sameDate(cached.asOf, asOf) && len(cached.bars) >= lookback {
+		return cloneBars(cached.bars[len(cached.bars)-lookback:]), nil
 	}
 
 	bars, err := c.market.Bars(context.Background(), symbol, lookback, asOf)
@@ -115,7 +128,7 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	})
 
 	c.barCacheMu.Lock()
-	c.barCache[symbol] = bars
+	c.barCache[symbol] = barCacheEntry{asOf: asOf, bars: bars}
 	c.barCacheMu.Unlock()
 
 	if len(bars) > lookback {
@@ -171,7 +184,7 @@ func (c *ctx) Logger() Logger {
 func (c *ctx) reset() {
 	c.barCacheMu.Lock()
 	defer c.barCacheMu.Unlock()
-	c.barCache = map[string][]order.Bar{}
+	c.barCache = map[string]barCacheEntry{}
 }
 
 // Reset clears the per-Context bar cache. The engine calls this when the

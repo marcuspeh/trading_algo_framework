@@ -153,7 +153,21 @@ func (e *Engine) advanceRestingOrders(date time.Time) {
 func (e *Engine) markToMarket(date time.Time) {
 	for _, pos := range e.portfolio.Positions() {
 		bars, err := e.market.Bars(context.Background(), pos.Symbol, 1, date)
-		if err != nil || len(bars) == 0 {
+		if err != nil {
+			// Logged rather than swallowed: a stale mark silently
+			// understates the portfolio value for the rest of the day.
+			e.logger.Warn("mark-to-market failed",
+				"symbol", pos.Symbol,
+				"date", date.Format("2006-01-02"),
+				"err", err.Error(),
+			)
+			continue
+		}
+		if len(bars) == 0 {
+			e.logger.Warn("mark-to-market found no bar",
+				"symbol", pos.Symbol,
+				"date", date.Format("2006-01-02"),
+			)
 			continue
 		}
 		e.portfolio.MarkPrice(pos.Symbol, bars[len(bars)-1].Close)

@@ -87,11 +87,14 @@ func (p *Backtest) ApplyFill(symbol string, side order.Side, quantity, price flo
 	switch {
 	case side == order.Buy:
 		if pos.Quantity < 0 {
-			// Covering a short.
+			// Covering a short: buy back `cover` shares at `price`, which
+			// debits cash for the covered part. Any leftover quantity
+			// flips the position long below.
 			cover := quantity
 			if cover > -pos.Quantity {
 				cover = -pos.Quantity
 			}
+			p.cash -= cover * price
 			pos.Quantity += cover
 			quantity -= cover
 			if pos.Quantity == 0 {

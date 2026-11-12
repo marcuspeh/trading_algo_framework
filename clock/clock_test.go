@@ -11,8 +11,9 @@ func TestBacktestClock_NowAndToday(t *testing.T) {
 	start := time.Date(2024, 1, 2, 14, 30, 0, 0, time.UTC)
 	c := clock.NewBacktest(start)
 
-	// NewBacktest normalizes time-of-day to zero.
-	wantNow := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	// NewBacktest normalizes time-of-day to zero and anchors the date on
+	// the NYSE calendar.
+	wantNow := time.Date(2024, 1, 2, 0, 0, 0, 0, clock.NYSE)
 	if got := c.Now(); !got.Equal(wantNow) {
 		t.Fatalf("Now()=%v want %v", got, wantNow)
 	}
@@ -25,7 +26,7 @@ func TestBacktestClock_SetAdvances(t *testing.T) {
 	c := clock.NewBacktest(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
 	c.Set(time.Date(2024, 1, 3, 9, 0, 0, 0, time.UTC))
 
-	if got := c.Today(); !got.Equal(time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)) {
+	if got := c.Today(); !got.Equal(time.Date(2024, 1, 3, 0, 0, 0, 0, clock.NYSE)) {
 		t.Fatalf("Today()=%v", got)
 	}
 	if got := c.Now().Hour(); got != 9 {

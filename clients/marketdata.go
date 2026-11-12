@@ -8,6 +8,7 @@ import (
 	"time"
 
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
+	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -32,8 +33,13 @@ type Market struct {
 func NewMarket(c MarketSource) *Market { return &Market{client: c} }
 
 // Bars fetches up to `lookback` bars for symbol ending on or before asOf.
-// The SDK's GetBars range is [from, to] inclusive; we set `to` = asOf and
-// compute `from` from the lookback window.
+//
+// The SDK's GetBars range is [from, to] inclusive and the service
+// interprets both as NYSE calendar dates, so the request is anchored on
+// the NYSE calendar: `to` is the trading day of asOf, and `from` reaches
+// back far enough to cover `lookback` trading days once weekends and
+// holidays are discounted. The result is then trimmed to the most
+// recent `lookback` bars.
 func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	if m.client == nil {
 		return nil, fmt.Errorf("market adapter: nil market-data client")
@@ -45,10 +51,15 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 		return nil, fmt.Errorf("market adapter: symbol is required")
 	}
 
-	// Conservative from-date: the SDK doesn't filter by lookback, so
-	// over-request by `lookback` trading days and trim the result.
-	from := asOf.AddDate(0, 0, -lookback*2)
-	resp, err := m.client.GetBars(ctx, symbol, from, asOf)
+	// The service only serves trading days, so the window has to be
+	// wider than `lookback` calendar days to yield `lookback` bars.
+	// 1.5 days per bar covers weekends; the extra 10 covers the
+	// Christmas and New Year closures, the longest stretch the exchange
+	// takes.
+	asOfNYSE := clock.NYSETime(asOf)
+	from := asOfNYSE.AddDate(0, 0, -(lookback*3/2 + 10))
+
+	resp, err := m.client.GetBars(ctx, symbol, from, asOfNYSE)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +70,10 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 	bars := make([]order.Bar, 0, len(resp.Bars))
 	for _, b := range resp.Bars {
 		bars = append(bars, order.Bar{
-			Symbol:    symbol,
-			Timestamp: time.UnixMilli(b.Timestamp),
+			Symbol: symbol,
+			// The service stamps daily bars at NYSE midnight, so the
+			// bar's calendar date is its trading day.
+			Timestamp: time.UnixMilli(b.Timestamp).In(clock.NYSE),
 			Open:      b.Open,
 			High:      b.High,
 			Low:       b.Low,
@@ -72,7 +85,7 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 
 	// Trim to the most recent `lookback` bars at or before asOf.
 	end := len(bars)
-	for end > 0 && bars[end-1].Timestamp.After(asOf) {
+	for end > 0 && bars[end-1].Timestamp.After(asOfNYSE) {
 		end--
 	}
 	if end == 0 {
@@ -119,7 +132,8 @@ func (c *Constituents) Constituents(ctx context.Context, etfSymbol string, asOf 
 		return nil, fmt.Errorf("constituents adapter: etf symbol required")
 	}
 
-	date := asOf
+	// The service keys snapshots by NYSE calendar date.
+	date := clock.NYSETime(asOf)
 	for i := 0; i <= constituentsLookbackDays; i++ {
 		resp, err := c.client.GetConstituents(ctx, etfSymbol, date)
 		if err == nil {
@@ -167,13 +181,30 @@ func NewStaticBars(bars map[string][]order.Bar) *StaticBars {
 	for s, list := range bars {
 		cp := make([]order.Bar, len(list))
 		copy(cp, list)
+		for i := range cp {
+			cp[i].Timestamp = nyseBarTime(cp[i].Timestamp)
+		}
 		sort.SliceStable(cp, func(i, j int) bool { return cp[i].Timestamp.Before(cp[j].Timestamp) })
 		out.bars[s] = cp
 	}
 	return out
 }
 
+// nyseBarTime re-anchors a bar's timestamp to NYSE midnight, keeping
+// the calendar date it was written with.
+//
+// Bars are daily, so only their trading day matters. Anchoring every
+// bar on one calendar lets the framework compare bar dates against the
+// clock's date without zone-dependent off-by-one errors.
+func nyseBarTime(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, clock.NYSE)
+}
+
 // Bars returns up to `lookback` bars ending on or before asOf.
+//
+// Bars are matched on calendar date, so a bar stamped at any time of
+// day counts as belonging to that date.
 func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	if lookback <= 0 {
 		return nil, fmt.Errorf("static-bars: lookback must be > 0")
@@ -183,7 +214,7 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 		return nil, job.ErrNotFound
 	}
 	idx := sort.Search(len(list), func(i int) bool {
-		return list[i].Timestamp.After(asOf)
+		return afterDate(list[i].Timestamp, asOf)
 	})
 	end := idx
 	if end == 0 {
@@ -198,6 +229,20 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 	return out, nil
 }
 
+// afterDate reports whether bar's calendar date falls after date's
+// calendar date.
+func afterDate(bar, date time.Time) bool {
+	by, bm, bd := bar.Date()
+	dy, dm, dd := date.Date()
+	if by != dy {
+		return by > dy
+	}
+	if bm != dm {
+		return bm > dm
+	}
+	return bd > dd
+}
+
 // StaticBarSource is a BarProvider for backtest fills backed by the
 // same data as StaticBars.
 type StaticBarSource struct {
@@ -209,6 +254,9 @@ func NewStaticBarSource(bars map[string][]order.Bar) *StaticBarSource {
 	for s, list := range bars {
 		inner := make([]order.Bar, len(list))
 		copy(inner, list)
+		for i := range inner {
+			inner[i].Timestamp = nyseBarTime(inner[i].Timestamp)
+		}
 		cp[s] = inner
 	}
 	return &StaticBarSource{bars: cp}

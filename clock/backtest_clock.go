@@ -12,10 +12,12 @@ type BacktestClock struct {
 	current time.Time
 }
 
-// NewBacktest returns a BacktestClock seeded at the supplied time
-// (time-of-day zero in the supplied location).
+// NewBacktest returns a BacktestClock seeded at the supplied time.
+//
+// The seed's calendar date is read as written and anchored on the NYSE
+// calendar, with the time-of-day normalized to midnight.
 func NewBacktest(start time.Time) *BacktestClock {
-	return &BacktestClock{current: StartOfDay(start)}
+	return &BacktestClock{current: NYSEStartOfDay(start)}
 }
 
 // Set replaces the current simulated time. The date component is used
@@ -23,7 +25,7 @@ func NewBacktest(start time.Time) *BacktestClock {
 func (c *BacktestClock) Set(t time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.current = t
+	c.current = NYSETime(t)
 }
 
 // Advance moves the current simulated time forward to t.

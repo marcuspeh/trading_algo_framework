@@ -150,7 +150,9 @@ func (s *Real) nextPending(now time.Time) (time.Time, job.Job, bool) {
 		if !today.Before(now) {
 			candidates = append(candidates, pending{at: today, job: j})
 		}
-		tomorrow := today.Add(24 * time.Hour)
+		// AddDate, not Add(24h): across a DST change the latter lands
+		// an hour off the intended slot time.
+		tomorrow := today.AddDate(0, 0, 1)
 		candidates = append(candidates, pending{at: tomorrow, job: j})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {

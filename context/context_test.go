@@ -127,6 +127,79 @@ func TestContext_MissingDepsRejected(t *testing.T) {
 	}
 }
 
+// countingMarket counts how many times the market client is called.
+type countingMarket struct {
+	calls int
+	bars  []order.Bar
+}
+
+func (m *countingMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) ([]order.Bar, error) {
+	m.calls++
+	return m.bars, nil
+}
+
+// The Context caches bars per symbol per day. Repeated calls on the same
+// day must be served from the cache rather than re-fetching.
+//
+// The cache used to be keyed on the newest bar's date, which is the
+// bar's trading day - usually earlier than the day the fetch was made -
+// so it never matched and every call went to the market client.
+func TestContext_BarsCachedWithinDay(t *testing.T) {
+	today := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	mkt := &countingMarket{bars: []order.Bar{
+		{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100},
+	}}
+	c, err := tfcontext.New(tfcontext.Options{
+		Clock:     &backtestClock{t: today},
+		Portfolio: fakePortfolio{},
+		Market:    mkt,
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		if _, err := c.Bars("AAPL", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mkt.calls != 1 {
+		t.Fatalf("market client called %d times, want 1", mkt.calls)
+	}
+}
+
+// A cache entry fetched for one day must not be reused for another.
+func TestContext_BarsNotCachedAcrossDays(t *testing.T) {
+	mkt := &countingMarket{bars: []order.Bar{
+		{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100},
+	}}
+	clk := &backtestClock{t: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)}
+	c, err := tfcontext.New(tfcontext.Options{
+		Clock:     clk,
+		Portfolio: fakePortfolio{},
+		Market:    mkt,
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Bars("AAPL", 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.t = time.Date(2024, 1, 11, 0, 0, 0, 0, time.UTC)
+	if _, err := c.Bars("AAPL", 1); err != nil {
+		t.Fatal(err)
+	}
+	if mkt.calls != 2 {
+		t.Fatalf("market client called %d times, want 2", mkt.calls)
+	}
+}
+
 // TestContext_DefaultTradingDayFuncDoesNotPanic verifies that omitting
 // IsTradingDay falls back to the weekday calendar instead of panicking
 // on a nil function call.

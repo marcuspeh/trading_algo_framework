@@ -6,6 +6,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -43,10 +44,10 @@ func TestBacktest_ContextSeesCurrentSimulatedDate(t *testing.T) {
 	}
 
 	want := []time.Time{
-		time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
-		time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC),
-		time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC),
-		time.Date(2024, 1, 5, 0, 0, 0, 0, time.UTC),
+		time.Date(2024, 1, 2, 0, 0, 0, 0, clock.NYSE),
+		time.Date(2024, 1, 3, 0, 0, 0, 0, clock.NYSE),
+		time.Date(2024, 1, 4, 0, 0, 0, 0, clock.NYSE),
+		time.Date(2024, 1, 5, 0, 0, 0, 0, clock.NYSE),
 	}
 	if len(seen) != len(want) {
 		t.Fatalf("handler ran %d times, want %d", len(seen), len(want))

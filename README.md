@@ -90,7 +90,7 @@ A Job fires every day at its `TimeOfDay`. To run on a subset of days, check `ctx
 
 `job.Context` is what the handler receives. It is the same shape in backtest and live:
 
-- `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`
+- `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`, on the NYSE (US/Eastern) calendar
 - `Mode() Mode` — `job.ModeBacktest` or `job.ModeLive`
 - `Bars(symbol string, lookback int) ([]order.Bar, error)`
 - `Constituents(etf string) ([]string, error)`
@@ -114,6 +114,17 @@ to the indicator library as-is.
 | Portfolio  | `portfolio.Backtest`            | `portfolio.Live` (mirrors broker) |
 
 The same `Job` handler runs against any of these. No scattered `if mode == "backtest"` branching in user code.
+
+### Calendar
+
+Every date the framework handles is anchored on the NYSE (US/Eastern) calendar:
+
+- `clock.RealClock` and `clock.BacktestClock` both resolve to `America/New_York`, so `Now()` and `Today()` return NYSE dates regardless of the host machine's timezone.
+- Bars carry their trading day stamped at NYSE midnight, so a bar's `Timestamp` date always matches the session it belongs to.
+- Job slots fire at NYSE wall-clock time, and stay on the intended slot across daylight-saving transitions.
+- `ctx.IsTradingDay(date)` uses the NYSE holiday calendar, which excludes weekends and observed market holidays.
+
+The zone database is embedded via `time/tzdata`, so the calendar resolves even on hosts without a system `zoneinfo` directory.
 
 ### Live wiring
 

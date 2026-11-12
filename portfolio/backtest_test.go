@@ -60,6 +60,44 @@ func TestBacktest_BuyCoversShortThenOpensLong(t *testing.T) {
 	if pos.AvgPrice != 90 {
 		t.Fatalf("avg=%f", pos.AvgPrice)
 	}
+	// Short sold 10 @ 100 (+1000), bought 15 @ 90 (-1350).
+	if got := p.Cash(); got != 9_650 {
+		t.Fatalf("cash=%f want 9650", got)
+	}
+}
+
+// Covering a short must debit cash for the shares bought back. The
+// framework used to update the position without moving cash, so a
+// short that was covered reported a profit that never happened.
+func TestBacktest_CoveringShortDebitsCash(t *testing.T) {
+	p := portfolio.NewBacktest(10_000)
+	p.ApplyFill("AAPL", order.Sell, 10, 100) // short 10 @ 100
+	if got := p.Cash(); got != 11_000 {
+		t.Fatalf("after short: cash=%f want 11000", got)
+	}
+
+	p.ApplyFill("AAPL", order.Buy, 3, 90) // cover 3 @ 90
+	if got := p.Cash(); got != 10_730 {
+		t.Fatalf("after partial cover: cash=%f want 10730", got)
+	}
+	if got := p.Position("AAPL").Quantity; got != -7 {
+		t.Fatalf("after partial cover: qty=%f want -7", got)
+	}
+}
+
+func TestBacktest_FullCoverOfShortDebitsCash(t *testing.T) {
+	p := portfolio.NewBacktest(10_000)
+	p.ApplyFill("AAPL", order.Sell, 10, 100) // short 10 @ 100
+	p.ApplyFill("AAPL", order.Buy, 10, 90)   // cover all @ 90
+
+	// 10000 + 1000 (short proceeds) - 900 (buy back) = 10100, which
+	// books the 100 of profit the short actually made.
+	if got := p.Cash(); got != 10_100 {
+		t.Fatalf("cash=%f want 10100", got)
+	}
+	if got := p.Position("AAPL").Quantity; got != 0 {
+		t.Fatalf("qty=%f want 0", got)
+	}
 }
 
 func TestBacktest_MarkPriceAffectsValue(t *testing.T) {
