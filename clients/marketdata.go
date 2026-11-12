@@ -2,73 +2,15 @@ package clients
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
-
-// ETF HTTP client and constituent types.
-
-type ETFClient struct {
-	baseURL string
-}
-
-func NewETFClient(baseURL string) *ETFClient {
-	if baseURL == "" {
-		baseURL = "http://localhost:8001"
-	}
-	return &ETFClient{baseURL: baseURL}
-}
-
-func (c *ETFClient) GetConstituents(ctx context.Context, symbol string) ([]Constituent, error) {
-	url := fmt.Sprintf("%s/constituents?symbol=%s", c.baseURL, symbol)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch from remote: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp struct {
-			Detail string `json:"detail"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
-			return nil, fmt.Errorf("remote server returned error: %s", errResp.Detail)
-		}
-		return nil, fmt.Errorf("remote server returned status: %d", resp.StatusCode)
-	}
-
-	var result ConstituentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result.Constituents, nil
-}
-
-type Constituent struct {
-	Ticker string  `json:"ticker"`
-	Name   string  `json:"name"`
-	Weight float64 `json:"weight"`
-}
-
-type ConstituentResponse struct {
-	Symbol       string        `json:"symbol"`
-	Constituents []Constituent `json:"constituents"`
-	Source       string        `json:"source"`
-}
 
 // MarketSource is the subset of marketdata.Client functionality the
 // market adapter needs. It mirrors the SDK's two public methods.
@@ -143,40 +85,75 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 	return bars[start:end], nil
 }
 
-// Universe is the subset of ETFClient functionality the constituents
-// adapter needs.
+// Universe is the subset of marketdata.Client functionality the
+// constituents adapter needs.
 type Universe interface {
-	GetConstituents(ctx context.Context, symbol string) ([]Constituent, error)
+	GetConstituents(ctx context.Context, symbol string, date time.Time) (*marketdata.ConstituentResponse, error)
 }
 
-// Constituents adapts the ETF client to the framework's
-// universe.Client interface. The asOf argument is currently
-// informational only - the existing client returns the current universe.
+// constituentsLookbackDays bounds how far back the adapter searches for
+// a snapshot when the requested date has none. The service refreshes
+// snapshots daily at 8:30 ET and backfills gaps over a 7-day window, so
+// a short walk finds the nearest available snapshot.
+const constituentsLookbackDays = 7
+
+// Constituents adapts the market-data-service SDK to the framework's
+// universe.Client interface.
+//
+// The service stores one snapshot per calendar day and exposes only
+// exact-date lookups, so a date without a snapshot is resolved by
+// walking backwards to the most recent one. That matches the
+// "most recent snapshot at or before asOf" rule the in-memory
+// StaticConstituents implements, so both sources agree on semantics.
 type Constituents struct {
 	client Universe
 }
 
 func NewConstituents(c Universe) *Constituents { return &Constituents{client: c} }
 
-func (c *Constituents) Constituents(ctx context.Context, etfSymbol string, _ time.Time) ([]string, error) {
+func (c *Constituents) Constituents(ctx context.Context, etfSymbol string, asOf time.Time) ([]string, error) {
 	if c.client == nil {
-		return nil, fmt.Errorf("constituents adapter: nil etf client")
+		return nil, fmt.Errorf("constituents adapter: nil market-data client")
 	}
 	if etfSymbol == "" {
 		return nil, fmt.Errorf("constituents adapter: etf symbol required")
 	}
-	list, err := c.client.GetConstituents(ctx, etfSymbol)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(list))
-	for _, c := range list {
-		if c.Ticker == "" {
-			continue
+
+	date := asOf
+	for i := 0; i <= constituentsLookbackDays; i++ {
+		resp, err := c.client.GetConstituents(ctx, etfSymbol, date)
+		if err == nil {
+			out := make([]string, 0, len(resp.Constituents))
+			for _, ticker := range resp.Constituents {
+				if ticker == "" {
+					continue
+				}
+				out = append(out, ticker)
+			}
+			return out, nil
 		}
-		out = append(out, c.Ticker)
+		if !isMissingSnapshot(err) {
+			return nil, err
+		}
+		date = date.AddDate(0, 0, -1)
 	}
-	return out, nil
+	return nil, job.ErrNotFound
+}
+
+// isMissingSnapshot reports whether err means the service holds no
+// snapshot for the requested date, as opposed to a rejected request.
+//
+// The SDK folds HTTP status codes into a plain error, so the 404 is
+// recognizable either by the service's message or, when the response
+// body isn't decodable, by the bare status. A different error - an
+// unsupported symbol, say - is returned to the caller unchanged.
+func isMissingSnapshot(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "No constituents snapshot") ||
+		strings.Contains(msg, "status: 404")
 }
 
 // StaticBars is an in-memory market.Client used primarily by tests and

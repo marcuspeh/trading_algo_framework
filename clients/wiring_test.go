@@ -28,7 +28,7 @@ func TestLiveWiringCompiles(t *testing.T) {
 		Port:    5000,
 	})
 	marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
-	universeClient := clients.NewConstituents(clients.NewETFClient("http://localhost:8001"))
+	universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
 
 	a := app.NewApp(
 		app.WithLive(app.LiveConfig{Broker: brokerClient}),

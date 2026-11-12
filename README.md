@@ -125,7 +125,7 @@ brokerClient := clients.NewBrokerClient(ctx, clients.BrokerConfig{
     Port:    5000,
 })
 marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
-universeClient := clients.NewConstituents(clients.NewETFClient("http://localhost:8001"))
+universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
 
 a := app.NewApp(
     app.WithLive(app.LiveConfig{Broker: brokerClient}),
@@ -194,7 +194,7 @@ trading-framework/
 ├── app/         # NewApp, options, mode stacks
 ├── backtest/    # backtest engine loop
 ├── broker/      # broker.Client interface + wire types
-├── clients/     # broker + ETF HTTP clients and adapters
+├── clients/     # broker HTTP client + market-data-service adapters
 ├── clock/       # BacktestClock, RealClock
 ├── config/      # file-backed job.Config
 ├── context/     # Context implementation
