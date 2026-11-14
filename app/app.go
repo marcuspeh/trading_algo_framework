@@ -125,6 +125,7 @@ func (a *App) runBacktest() error {
 		IsTradingDay: a.tradingDay,
 		Mode:         job.ModeBacktest,
 		Broker:       a.executor,
+		Session:      a.session,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest context: %w", err)
@@ -252,6 +253,7 @@ func (a *App) runLive() error {
 		IsTradingDay: a.tradingDay,
 		Mode:         job.ModeLive,
 		Broker:       a.executor,
+		Session:      a.session,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live context: %w", err)
@@ -259,10 +261,12 @@ func (a *App) runLive() error {
 
 	engine, err := live.New(live.Config{
 		Broker:       a.liveBroker,
+		Executor:     a.executor,
 		Logger:       a.logger,
 		Risk:         a.risk,
 		Portfolio:    a.portfolio.(*portfolio.Live),
 		Clock:        a.clock,
+		Session:      a.session,
 		IsTradingDay: a.tradingDay,
 	})
 	if err != nil {
