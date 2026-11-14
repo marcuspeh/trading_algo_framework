@@ -1,8 +1,11 @@
 # trading-framework
 
-A small Go framework for writing strategies that run identically in backtest and live modes.
+A small Go framework for writing strategies that run identically in backtest
+and live modes.
 
-The same `Job` handler produces orders in both modes. The framework wires mode-specific implementations of `Clock`, `Scheduler`, `Executor`, and `Portfolio` underneath the strategy; the strategy never branches on mode.
+The same `Job` handler produces orders in both modes. The framework wires
+mode-specific implementations of `Clock`, `Scheduler`, `Executor` and
+`Portfolio` underneath the strategy; the strategy never branches on mode.
 
 ## Install
 
@@ -47,7 +50,6 @@ func main() {
             Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
             End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
             StartingCash: 10_000,
-            BarSource:    barSource,
         }),
         app.WithMarketClient(marketClient),
         app.WithUniverseClient(universeClient),
@@ -55,7 +57,7 @@ func main() {
     )
     a.RegisterJob(job.Job{
         Name:    "rebalance",
-        Time:    job.Time(16, 0),
+        Time:    job.AtClose(),
         Handler: rebalance,
     })
     if err := a.Run(); err != nil {
@@ -74,7 +76,8 @@ go run ./examples/simple-strategy
 
 ### Job
 
-The only abstraction a strategy writes. A `Job` has a name, a `TimeOfDay`, and a handler:
+The only abstraction a strategy writes. A `Job` has a name, a `Slot` and a
+handler:
 
 ```go
 type Handler func(ctx Context, date time.Time) ([]order.Order, error)
@@ -82,20 +85,45 @@ type Handler func(ctx Context, date time.Time) ([]order.Order, error)
 
 `job.JobHandler` is an alias for `job.Handler`, if you prefer the longer name.
 
-There are no `OnDay`, `OnConstituentChange`, or lifecycle callbacks. Every strategy action is a Job.
+There are no `OnDay`, `OnConstituentChange`, or lifecycle callbacks. Every
+strategy action is a Job.
 
-A Job fires every day at its `TimeOfDay`. To run on a subset of days, check `ctx.IsTradingDay(date)` inside the handler - the default predicate is the NYSE calendar, which excludes weekends and observed market holidays.
+### Slots
+
+A Job fires every day at its slot. A slot is either a fixed wall-clock time
+or an offset from a session boundary:
+
+```go
+job.Time(7, 30)             // 07:30, whatever the market is doing
+job.Time(10, 30)            // 10:30, during the session
+job.AtOpen()                 // 09:30
+job.BeforeOpen(2 * time.Hour) // 07:30
+job.AtClose()                // 16:00, or 13:00 on an early-close day
+job.BeforeClose(time.Hour)   // 15:00, or 12:00 on an early-close day
+```
+
+The close-relative forms exist because the session end is not a constant. The
+exchange closes at 13:00 on the day after Thanksgiving and on the other
+early-close days, and a strategy that wants to act at the close should not
+have to know which days those are.
+
+A slot is resolved against the session of the day it fires on, so a
+close-relative slot moves with the exchange.
 
 ### Context
 
-`job.Context` is what the handler receives. It is the same shape in backtest and live:
+`job.Context` is what the handler receives. It is the same shape in backtest
+and live:
 
-- `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`, on the NYSE (US/Eastern) calendar
+- `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`, on
+  the NYSE (US/Eastern) calendar
 - `Mode() Mode` — `job.ModeBacktest` or `job.ModeLive`
 - `Bars(symbol string, lookback int) ([]order.Bar, error)`
 - `Constituents(etf string) ([]string, error)`
 - `Position(symbol) order.Position`, `Positions() []order.Position`
 - `Cash() float64`, `PortfolioValue() float64`
+- `OpenOrders() ([]order.Order, error)`, `CancelOrder(id string) error`,
+  `UpdateOrder(id string, limit float64) error`
 - `IsTradingDay(date) bool`
 - `Logger() Logger`, `Config() Config`
 
@@ -104,36 +132,94 @@ A Job fires every day at its `TimeOfDay`. To run on a subset of days, check `ctx
 a `Symbol`, a `Timestamp`, OHLC prices and a `Volume`, and can be passed
 to the indicator library as-is.
 
+### The session anchor
+
+Every date the framework handles is anchored on the NYSE calendar. The
+**session anchor** is the most recent session whose close has passed, and
+everything that touches market data resolves its date through it:
+
+| A job fires | It reads | A market order fills at |
+|---|---|---|
+| before the close | the previous session | that session's close |
+| at or after the close | the current session | the current session's close |
+
+So a job at 09:00 on Tuesday reads Monday's close, and a job at 16:00 on
+Tuesday reads Tuesday's. No mode can see a bar that had not been printed
+yet.
+
+The close is per date: 16:00 ET normally, 13:00 ET on an early-close day.
+
+### The calendar
+
+The `calendar` package owns the exchange calendar: holidays, early closes,
+the session open (09:30) and close, and the previous and next trading day.
+
+Early closes - a 1:00 p.m. ET close - fall on:
+
+- the Friday after Thanksgiving;
+- Christmas Eve, December 24th, when it is a trading day;
+- July 3rd, when July 4th falls on a Tuesday, Wednesday, Thursday or
+  Friday.
+
+New Year's Eve is deliberately not an early close. The 1:00 p.m. close on
+December 31st belongs to the fixed-income calendar; the NYSE equity session
+runs to 4:00 p.m.
+
+The rules are checked against the published NYSE calendars for 2025 through
+2028 in the tests.
+
+Jobs do not fire on a day the exchange is closed, in either mode.
+
 ### Mode-specific implementations
 
-| Component  | Backtest                        | Live                              |
-|------------|---------------------------------|-----------------------------------|
-| Clock      | `clock.BacktestClock`           | `clock.RealClock`                 |
-| Scheduler  | `scheduler.Backtest` (no sleep) | `scheduler.Real` (waits wall clk) |
-| Executor   | `execution.Backtest` (sim fills)| `execution.Live` (broker client)  |
-| Portfolio  | `portfolio.Backtest`            | `portfolio.Live` (mirrors broker) |
+| Component  | Backtest                          | Live                              |
+|------------|-----------------------------------|-----------------------------------|
+| Clock      | `clock.BacktestClock`             | `clock.RealClock`                 |
+| Scheduler  | `scheduler.Backtest` (no sleep)   | `scheduler.Real` (waits wall clk) |
+| Executor   | `execution.Broker`                | `execution.Broker`                |
+| Broker     | `broker/mock` (in memory)         | ibkr-proxy SDK client             |
+| Portfolio  | `portfolio.Backtest`              | `portfolio.Live` (mirrors broker) |
 
-The same `Job` handler runs against any of these. No scattered `if mode == "backtest"` branching in user code.
+The executor is the same in both modes. What differs is the broker behind it:
+an in-memory mock for a backtest, the ibkr-proxy service for a live run.
+That is what makes "the same handler produces the same orders" true rather
+than merely intended.
 
-### Calendar
+### Market data
 
-Every date the framework handles is anchored on the NYSE (US/Eastern) calendar:
+Bars and constituents come from the
+[market-data-service SDK](https://github.com/marcuspeh/market-data-service),
+and the backtest's fill model reads its prices from the same adapter - so
+the strategy and the fill model can never see different ones.
 
-- `clock.RealClock` and `clock.BacktestClock` both resolve to `America/New_York`, so `Now()` and `Today()` return NYSE dates regardless of the host machine's timezone.
-- Bars carry their trading day stamped at NYSE midnight, so a bar's `Timestamp` date always matches the session it belongs to.
-- Job slots fire at NYSE wall-clock time, and stay on the intended slot across daylight-saving transitions.
-- `ctx.IsTradingDay(date)` uses the NYSE holiday calendar, which excludes weekends and observed market holidays.
-
-The zone database is embedded via `time/tzdata`, so the calendar resolves even on hosts without a system `zoneinfo` directory.
-
-### Live wiring
-
-Live needs a broker client. Any implementation of `broker.Client` works - the bundled HTTP client satisfies it directly:
+`ctx.Bars(symbol, n)` returns an error when the symbol has fewer than `n`
+bars, rather than a short history an indicator would silently be computed
+over:
 
 ```go
-brokerClient := clients.NewBrokerClient(ctx, clients.BrokerConfig{
+bars, err := ctx.Bars("AAPL", 20)
+if errors.Is(err, job.ErrInsufficientBars) {
+    // Not enough history yet.
+}
+```
+
+The adapter keeps what it has fetched and asks the service only for what is
+missing, so a backtest costs one bar per symbol per day rather than a
+window.
+
+### Broker
+
+The broker wire format is owned by the
+[ibkr-proxy SDK](https://github.com/marcuspeh/ibkr-proxy); the framework
+aliases its types rather than restating them, so the two cannot drift.
+
+A backtest runs against `broker/mock`, an in-memory broker that fills
+orders against historical bars. A live run talks to the ibkr-proxy service:
+
+```go
+brokerClient := clients.NewBroker(ctx, clients.BrokerConfig{
     BaseURL: "http://localhost",
-    Port:    5000,
+    Port:    5001,
 })
 marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
 universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
@@ -146,17 +232,82 @@ a := app.NewApp(
 )
 ```
 
-`LiveConfig` defaults `Portfolio` to `portfolio.NewLive()` and runs `execution.Reconciler` on startup so the local mirror matches the broker before any Job fires.
+Every call to the broker carries a deadline. The SDK sets no timeout on its
+HTTP client, so without one a stalled broker would hang the session.
+
+A live run checks the broker is connected before it starts, and refreshes
+the portfolio from the broker before every job - so a job that asks what it
+already holds sees what the broker says it holds.
+
+### Orders
+
+An order may carry protective legs and a time in force:
+
+```go
+order.Order{
+    Symbol:   "AAPL",
+    Side:     order.Buy,
+    Quantity: 10,
+    Type:     order.Limit,
+    Limit:    &entry,
+    TakeProfit: &target,
+    StopLoss:   &stop,
+    TIF:      "GTC",   // the default
+}
+```
+
+An order with both legs and a limit price is sent as a bracket. An order
+carrying legs but no limit price is rejected rather than silently sent as a
+plain order.
+
+The default time in force is `GTC`, so a resting limit order survives the
+session - the same in backtest and live.
+
+Every submission carries a freshly minted idempotency key. The broker's
+idempotency cache is shared across its market, limit and bracket endpoints,
+so a key reused across two order types would return the first response to
+the second call; the key is minted per submission rather than taken from the
+strategy's order id, which travels as the broker's order reference instead.
+
+### Transaction costs
+
+Backtest fills can model slippage and commission, so results are not
+unrealistically clean:
+
+```go
+app.WithBacktest(app.BacktestConfig{
+    // ...
+    SlippageBps:        5,   // 0.05% worse than the reference price
+    Commission:         1,   // flat fee per fill
+    CommissionPerShare: 0.01,
+})
+```
+
+Limit orders that do not trigger rest until they fill or are cancelled.
+
+### Warmup
+
+`AddWarmup` prefetches history before the first Job runs, so the opening bar
+of the backtest is not spent on a cold fetch:
+
+```go
+a.AddWarmup("AAPL", 50)
+```
+
+The warmup primes the same cache entry the first job reads, so it is not
+thrown away.
 
 ### Configuration
 
-`job.Config` is a key/value store the strategy reads through `ctx.Config()`. The `config` package provides a file-backed implementation:
+`job.Config` is a key/value store the strategy reads through `ctx.Config()`.
+The `config` package provides a file-backed implementation:
 
 ```go
 cfg, err := config.NewFile("strategy.conf")
 ```
 
-The file format is `key = value`, one per line; `#` starts a comment. Values may be quoted.
+The file format is `key = value`, one per line; `#` starts a comment. Values
+may be quoted.
 
 ### Indicators
 
@@ -175,29 +326,6 @@ for i := range bars {
 value := sma.Value()
 ```
 
-### Transaction costs
-
-Backtest fills can model slippage and commission, so results are not unrealistically clean:
-
-```go
-app.WithBacktest(app.BacktestConfig{
-    // ...
-    SlippageBps:       5,   // 0.05% worse than the reference price
-    Commission:        1,   // flat fee per fill
-    CommissionPerShare: 0.01,
-})
-```
-
-Limit orders that do not trigger stay resting and are retried on each subsequent day until they fill or are cancelled.
-
-### Warmup
-
-`AddWarmup` prefetches history before the first Job runs, so the opening bar of the backtest is not spent on a cold fetch:
-
-```go
-a.AddWarmup("AAPL", 50)
-```
-
 ## Package layout
 
 ```
@@ -205,19 +333,21 @@ trading-framework/
 ├── app/         # NewApp, options, mode stacks
 ├── backtest/    # backtest engine loop
 ├── broker/      # broker.Client interface + wire types
-├── clients/     # broker HTTP client + market-data-service adapters
-├── clock/       # BacktestClock, RealClock
+├── broker/mock/ # in-memory broker for backtests
+├── calendar/    # NYSE holidays, early closes, session times
+├── clients/     # broker client + market-data-service adapters
+├── clock/       # BacktestClock, RealClock, Session
 ├── config/      # file-backed job.Config
 ├── context/     # Context implementation
 ├── examples/    # simple-strategy
-├── execution/   # Executor interface + Backtest/Live/Reconciler
-├── job/         # Job, Handler, Context, TimeOfDay
+├── execution/   # Executor + order translation + reconciler
+├── job/         # Job, Slot, Handler, Context
 ├── live/        # live engine loop
 ├── logging/     # text logger
 ├── market/      # market.Client interface
 ├── order/       # Order, Bar, Position, Result
 ├── pipeline/    # log -> risk -> executor
-├── portfolio/   # Portfolio interface + Backtest/Live + NYSE calendar
+├── portfolio/   # Portfolio interface + Backtest/Live
 ├── risk/        # risk.Manager (Basic implementation)
 ├── scheduler/   # Scheduler interface + Backtest/Real
 └── universe/    # universe.Client interface
@@ -229,6 +359,7 @@ trading-framework/
 go test ./...
 ```
 
-The framework is designed so that tests don't require external services. The example uses `clients.StaticBars` and `clients.StaticConstituents` for fakes.
+The framework is designed so that tests don't require external services. The
+example uses `clients.StaticBars` and `clients.StaticConstituents` for fakes.
 
 The indicators-go library cross-checks its maths against Python TA-Lib in its own test suite. That test skips itself when `python3` with `pandas`, `numpy` and `ta-lib` is not installed.
