@@ -155,6 +155,22 @@ func (e *Backtest) Cancel(_ context.Context, id string) error {
 	return nil
 }
 
+// Update changes the limit price of a resting order.
+func (e *Backtest) Update(_ context.Context, id string, limit float64) error {
+	if limit <= 0 {
+		return fmt.Errorf("backtest executor: limit price must be positive")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	resting, ok := e.open[id]
+	if !ok {
+		return fmt.Errorf("backtest executor: no open order with id %q", id)
+	}
+	resting.order.Limit = &limit
+	e.open[id] = resting
+	return nil
+}
+
 func (e *Backtest) Portfolio() *portfolio.Backtest { return e.portfolio }
 
 type nopFillModel struct{}

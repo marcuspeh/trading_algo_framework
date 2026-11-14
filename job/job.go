@@ -7,6 +7,7 @@
 package job
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -58,6 +59,23 @@ type Context interface {
 	PortfolioValue() float64
 	Config() Config
 	Logger() Logger
+
+	// OpenOrders returns the orders resting at the broker. It is how a
+	// strategy inspects the entry orders it left behind.
+	OpenOrders() ([]order.Order, error)
+	// CancelOrder cancels a resting order by its id.
+	CancelOrder(orderID string) error
+	// UpdateOrder changes the limit price of a resting order.
+	UpdateOrder(orderID string, limit float64) error
+}
+
+// OrderBroker is the narrow view of the broker that the Context needs
+// to manage resting orders. It lives in the job package so the context
+// implementation does not have to depend on the execution package.
+type OrderBroker interface {
+	OpenOrders(ctx context.Context) ([]order.Order, error)
+	Cancel(ctx context.Context, orderID string) error
+	Update(ctx context.Context, orderID string, limit float64) error
 }
 
 // Config and Logger interfaces are satisfied by user-provided adapters.

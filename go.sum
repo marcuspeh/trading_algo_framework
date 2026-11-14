@@ -4,6 +4,8 @@ github.com/go-resty/resty/v2 v2.16.5 h1:hBKqmWrr7uRc3euHVqmh1HTHcKn99Smr7o5spptd
 github.com/go-resty/resty/v2 v2.16.5/go.mod h1:hkJtXbA2iKHzJheXYvQ8snQES5ZLGKMwQ07xAwp/fiA=
 github.com/marcuspeh/go-tools v0.0.0-20260322035212-e79095b18af5 h1:ab2HAFqVvdAOCGteRuEEwK8gNDJSQb2yUMD2zVkn0KM=
 github.com/marcuspeh/go-tools v0.0.0-20260322035212-e79095b18af5/go.mod h1:bOR44QPobBrCqn4fNOCIkn5E0UPSxKPgCLWgrAqsVgU=
+github.com/marcuspeh/ibkr-proxy/sdk/go v0.0.0-20260904165025-4b70f50df904 h1:ae97J7VBtCeCwbvQmhWF892sSOMGGB8e8N6y8WUtqzQ=
+github.com/marcuspeh/ibkr-proxy/sdk/go v0.0.0-20260904165025-4b70f50df904/go.mod h1:uuiXGOB6CtcOBtdc2yNR0iMlU4OedFonJI0Mt+jLo7c=
 github.com/marcuspeh/indicators-go v0.0.0-20260830162248-a9470b0a6c0a h1:N89vakz21IW3xMVbbliWNY6V3AIm5hwJbguK0hUpdIc=
 github.com/marcuspeh/indicators-go v0.0.0-20260830162248-a9470b0a6c0a/go.mod h1:jt2niPlmscJTHX2CckKqLsz0uEfFzyxkZmdhKeBW1AI=
 github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20260929150921-4786af761b14 h1:CRsSG4raVS4N1X2L9onnotnY+Herdv40Tgv6rmXAuP4=

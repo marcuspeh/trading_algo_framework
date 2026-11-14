@@ -99,6 +99,7 @@ func (a *App) runBacktest() error {
 		Logger:       a.logger,
 		IsTradingDay: a.tradingDay,
 		Mode:         job.ModeBacktest,
+		Broker:       a.executor,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest context: %w", err)
@@ -170,6 +171,7 @@ func (a *App) runLive() error {
 		Logger:       a.logger,
 		IsTradingDay: a.tradingDay,
 		Mode:         job.ModeLive,
+		Broker:       a.executor,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live context: %w", err)

@@ -53,7 +53,7 @@ type App struct {
 	liveEngine *liveEngine
 
 	// liveBroker is the broker used by the live stack.
-	liveBroker execution.BrokerClient
+	liveBroker execution.Client
 
 	jobs   []job.Job
 	warmup []warmupEntry
@@ -129,7 +129,7 @@ func WithBacktest(cfg BacktestConfig) Option {
 // LiveConfig is a convenience: when set, the App wires up the live stack
 // (RealClock, RealScheduler, LiveExecutor, LivePortfolio, Reconciler).
 type LiveConfig struct {
-	Broker execution.BrokerClient
+	Broker execution.Client
 }
 
 // WithLive configures the App for live mode and wires up the live stack.

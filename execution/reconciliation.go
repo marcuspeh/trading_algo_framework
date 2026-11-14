@@ -13,7 +13,7 @@ import (
 // Reconciler overwrites a portfolio.Live with broker state. The broker
 // is the source of truth.
 type Reconciler struct {
-	broker BrokerClient
+	broker Client
 	logger Logger
 	mirror *portfolio.Live
 }
@@ -24,7 +24,7 @@ type Logger interface {
 	Error(msg string, fields ...any)
 }
 
-func NewReconciler(b BrokerClient, m *portfolio.Live, log Logger) *Reconciler {
+func NewReconciler(b Client, m *portfolio.Live, log Logger) *Reconciler {
 	if log == nil {
 		log = nopLogger{}
 	}

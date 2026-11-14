@@ -17,6 +17,11 @@ type Options struct {
 	Logger       Logger
 	IsTradingDay TradingDayFunc
 	Mode         job.Mode
+
+	// Broker reaches the broker to manage resting orders. It is
+	// optional: without it, OpenOrders, CancelOrder and UpdateOrder
+	// report a missing dependency.
+	Broker job.OrderBroker
 }
 
 func (opts *Options) Validate() error {

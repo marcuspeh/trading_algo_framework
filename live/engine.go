@@ -26,7 +26,7 @@ type Engine struct {
 	scheduler  *scheduler.Real
 	executor   execution.Executor
 	portfolio  *portfolio.Live
-	broker     execution.BrokerClient
+	broker     execution.Client
 	risk       risk.Manager
 	logger     job.Logger
 	reconciler *execution.Reconciler
@@ -34,7 +34,7 @@ type Engine struct {
 
 // Config configures a live Engine.
 type Config struct {
-	Broker       execution.BrokerClient
+	Broker       execution.Client
 	Market       market.Client
 	Universe     universe.Client
 	Config       job.Config

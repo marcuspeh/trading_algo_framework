@@ -14,6 +14,8 @@ type Executor interface {
 	Positions(ctx context.Context) ([]order.Position, error)
 	OpenOrders(ctx context.Context) ([]order.Order, error)
 	Cancel(ctx context.Context, orderID string) error
+	// Update changes the limit price of a resting order.
+	Update(ctx context.Context, orderID string, limit float64) error
 }
 
 // FillModel decides whether and at what price an order fills in backtest

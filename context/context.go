@@ -45,6 +45,7 @@ type ctx struct {
 	logger     Logger
 	tradingDay TradingDayFunc
 	mode       job.Mode
+	broker     job.OrderBroker
 
 	barCacheMu sync.Mutex
 	barCache   map[string]barCacheEntry
@@ -80,6 +81,7 @@ func New(opts Options) (job.Context, error) {
 		logger:     opts.Logger,
 		tradingDay: opts.GetIsTradingDay(),
 		mode:       opts.GetMode(),
+		broker:     opts.Broker,
 		barCache:   map[string]barCacheEntry{},
 	}, nil
 }
@@ -179,6 +181,30 @@ func (c *ctx) Config() Config {
 
 func (c *ctx) Logger() Logger {
 	return c.logger
+}
+
+// OpenOrders returns the orders resting at the broker.
+func (c *ctx) OpenOrders() ([]order.Order, error) {
+	if c.broker == nil {
+		return nil, errMissing("broker")
+	}
+	return c.broker.OpenOrders(context.Background())
+}
+
+// CancelOrder cancels a resting order by its id.
+func (c *ctx) CancelOrder(orderID string) error {
+	if c.broker == nil {
+		return errMissing("broker")
+	}
+	return c.broker.Cancel(context.Background(), orderID)
+}
+
+// UpdateOrder changes the limit price of a resting order.
+func (c *ctx) UpdateOrder(orderID string, limit float64) error {
+	if c.broker == nil {
+		return errMissing("broker")
+	}
+	return c.broker.Update(context.Background(), orderID, limit)
 }
 
 func (c *ctx) reset() {

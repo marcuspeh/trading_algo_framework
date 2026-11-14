@@ -33,12 +33,42 @@ func (t OrderType) String() string {
 }
 
 type Order struct {
-	ID       string
+	// ID is the strategy's own correlation id. It is sent to the
+	// broker as the order reference, not as the idempotency key.
+	ID string
+
 	Symbol   string
 	Side     Side
 	Quantity float64
 	Type     OrderType
 	Limit    *float64
+
+	// TIF is the time in force: "DAY", "GTC", "IOC", "FOK" or "GTD".
+	// An empty value means "GTC", so a resting limit order survives
+	// the session - the same in backtest and live.
+	TIF string
+
+	// TakeProfit and StopLoss attach protective legs to a limit order.
+	// An order carrying both is sent as a bracket.
+	TakeProfit *float64
+	StopLoss   *float64
+
+	// OutsideRTH allows the order to be submitted outside regular
+	// trading hours.
+	OutsideRTH bool
+}
+
+// TimeInForce returns the order's time in force, defaulting to GTC.
+func (o Order) TimeInForce() string {
+	if o.TIF == "" {
+		return "GTC"
+	}
+	return o.TIF
+}
+
+// IsBracket reports whether the order carries both protective legs.
+func (o Order) IsBracket() bool {
+	return o.TakeProfit != nil && o.StopLoss != nil
 }
 
 type Position struct {

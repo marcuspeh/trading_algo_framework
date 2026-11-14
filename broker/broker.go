@@ -1,109 +1,79 @@
-// Package broker defines the canonical request/response types and the
-// Client interface used to talk to a trading broker.
+// Package broker defines the interface the framework uses to talk to a
+// trading broker.
 //
-// These types are the single source of truth for the broker wire format.
-// The clients/ package implements Client over HTTP, and the execution
-// package consumes Client. Both speak the same types, so a concrete
-// broker client can be handed straight to app.WithLive.
+// The request and response types are owned by the ibkr-proxy SDK, so
+// the wire format has exactly one definition. This package aliases
+// them rather than restating them, which means the SDK's own client
+// satisfies broker.Client with no adapter - and the framework cannot
+// drift from the service it talks to.
+//
+// The clients/ package supplies a live client (the SDK's client with a
+// deadline on every call) and broker/mock supplies the in-memory broker
+// a backtest runs against.
 package broker
 
-import "context"
+import (
+	"context"
 
-// Client is the minimal surface the framework needs from a broker.
+	ibkrproxy "github.com/marcuspeh/ibkr-proxy/sdk/go"
+)
+
+// Client is the surface the framework needs from a broker.
+//
+// It is satisfied by *ibkrproxy.BrokerClient, which talks to the
+// ibkr-proxy service, and by the mock broker the backtest runs
+// against.
 type Client interface {
+	Health(ctx context.Context) (*HealthResponse, error)
 	PlaceMarketOrder(ctx context.Context, req MarketOrderRequest, idempotencyKey string) (*OrderResponse, error)
 	PlaceLimitOrder(ctx context.Context, req LimitOrderRequest, idempotencyKey string) (*OrderResponse, error)
+	PlaceBracketOrder(ctx context.Context, req BracketOrderRequest, idempotencyKey string) (*BracketOrderResponse, error)
+	UpdateOrder(ctx context.Context, orderID int, req UpdateOrderRequest) (*OrderResponse, error)
 	CancelOrder(ctx context.Context, orderID int) error
 	GetPositions(ctx context.Context) ([]PositionResponse, error)
 	GetOpenOrders(ctx context.Context) ([]OpenOrderResponse, error)
 	GetAccountNAV(ctx context.Context) (*AccountNAVResponse, error)
 }
 
-// OrderRequest is the common body of a broker order.
-type OrderRequest struct {
-	Symbol        string  `json:"symbol"`
-	Action        string  `json:"action"`
-	TotalQuantity float64 `json:"totalQuantity"`
-	OrderRef      string  `json:"orderRef,omitempty"`
-	OutsideRTH    bool    `json:"outsideRth"`
-}
+// The wire types are the ibkr-proxy SDK's, aliased so the framework
+// and the SDK can never disagree about the format.
+type (
+	// Contract groups the instrument fields shared by every order.
+	Contract = ibkrproxy.Contract
 
-// MarketOrderRequest is a market order.
-type MarketOrderRequest struct {
-	OrderRequest
-}
+	// OrderRequest is the common body of a broker order.
+	OrderRequest = ibkrproxy.OrderRequest
 
-// LimitOrderRequest is a limit order.
-type LimitOrderRequest struct {
-	OrderRequest
-	LmtPrice float64 `json:"lmtPrice"`
-}
+	// MarketOrderRequest is a market order.
+	MarketOrderRequest = ibkrproxy.MarketOrderRequest
 
-// BracketOrderRequest is an order with attached take-profit and
-// stop-loss legs.
-type BracketOrderRequest struct {
-	OrderRequest
-	LmtPrice float64 `json:"lmtPrice"`
-	TPPrice  float64 `json:"tpPrice"`
-	SLPrice  float64 `json:"slPrice"`
-}
+	// LimitOrderRequest is a limit order. TIF is the time in force:
+	// "DAY", "GTC", "IOC", "FOK" or "GTD".
+	LimitOrderRequest = ibkrproxy.LimitOrderRequest
 
-// UpdateOrderRequest carries the mutable fields of a resting order.
-type UpdateOrderRequest struct {
-	LmtPrice      *float64 `json:"lmtPrice,omitempty"`
-	AuxPrice      *float64 `json:"auxPrice,omitempty"`
-	TotalQuantity *float64 `json:"totalQuantity,omitempty"`
-}
+	// BracketOrderRequest is an order with attached take-profit and
+	// stop-loss legs. ParentTIF governs the parent; the children are
+	// always good-till-cancelled server-side.
+	BracketOrderRequest = ibkrproxy.BracketOrderRequest
 
-// OrderResponse is the broker's acknowledgement of a placed order.
-type OrderResponse struct {
-	PermID  int    `json:"permId"`
-	OrderID int    `json:"orderId"`
-	Status  string `json:"status"`
-}
+	// UpdateOrderRequest carries the mutable fields of a resting order.
+	UpdateOrderRequest = ibkrproxy.UpdateOrderRequest
 
-// BracketOrderResponse acknowledges a bracket order and its legs.
-type BracketOrderResponse struct {
-	ParentPermID  int    `json:"parentPermId"`
-	ParentOrderID int    `json:"parentOrderId"`
-	Status        string `json:"status"`
-}
+	// OrderResponse is the broker's acknowledgement of a placed order.
+	OrderResponse = ibkrproxy.OrderResponse
 
-// PositionResponse is a single broker-held position.
-type PositionResponse struct {
-	ConID       int     `json:"conId"`
-	Symbol      string  `json:"symbol"`
-	Quantity    float64 `json:"quantity"`
-	AverageCost float64 `json:"averageCost"`
-}
+	// BracketOrderResponse acknowledges a bracket order and its legs.
+	BracketOrderResponse = ibkrproxy.BracketOrderResponse
 
-// AccountNAVResponse is the account's net asset value.
-type AccountNAVResponse struct {
-	Account  string  `json:"account"`
-	NAV      float64 `json:"nav"`
-	Currency string  `json:"currency"`
-}
+	// PositionResponse is a single broker-held position.
+	PositionResponse = ibkrproxy.PositionResponse
 
-// OpenOrderResponse is a resting broker order.
-type OpenOrderResponse struct {
-	PermID        int      `json:"permId"`
-	OrderID       int      `json:"orderId"`
-	Symbol        string   `json:"symbol"`
-	Action        string   `json:"action"`
-	TotalQuantity float64  `json:"totalQuantity"`
-	LmtPrice      *float64 `json:"lmtPrice,omitempty"`
-	AuxPrice      *float64 `json:"auxPrice,omitempty"`
-	Status        string   `json:"status"`
-	Remaining     float64  `json:"remaining"`
-}
+	// AccountNAVResponse is the account's net asset value.
+	AccountNAVResponse = ibkrproxy.AccountNAVResponse
 
-// OHLCResponse is a daily bar as returned by the broker's OHLC endpoint.
-type OHLCResponse struct {
-	Symbol string  `json:"symbol"`
-	Open   float64 `json:"open"`
-	High   float64 `json:"high"`
-	Low    float64 `json:"low"`
-	Close  float64 `json:"close"`
-	Volume float64 `json:"volume"`
-	Date   string  `json:"date"`
-}
+	// HealthResponse reports whether the broker is connected.
+	HealthResponse = ibkrproxy.HealthResponse
+
+	// OpenOrderResponse is a resting broker order.
+	OpenOrderResponse = ibkrproxy.OpenOrderResponse
+)
