@@ -225,7 +225,9 @@ func (s *Real) nextPending(now time.Time) (time.Time, []job.Job, bool) {
 		searchFrom = lastFired.Add(time.Nanosecond)
 	}
 
-	day := now
+	// The walk is on the NYSE calendar, so a clock in another zone
+	// still resolves slots against the exchange's dates.
+	day := now.In(clock.NYSE)
 	for i := 0; i < maxSlotSearchDays; i++ {
 		if tradingDay(day) {
 			if slot, matched, ok := s.slotOn(jobs, day, searchFrom); ok {

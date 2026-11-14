@@ -51,6 +51,35 @@ func (s *Session) IsTradingDay(date time.Time) bool {
 	return s.tradingDay(date)
 }
 
+// NextTradingDay returns the next trading day strictly after the given
+// date.
+//
+// It uses the session's own trading-day predicate, so a strategy that
+// runs on a different exchange's days gets those days.
+func (s *Session) NextTradingDay(date time.Time) time.Time {
+	candidate := date.AddDate(0, 0, 1)
+	for i := 0; i < 14; i++ {
+		if s.tradingDay(candidate) {
+			return candidate
+		}
+		candidate = candidate.AddDate(0, 0, 1)
+	}
+	return candidate
+}
+
+// PreviousTradingDay returns the most recent trading day strictly
+// before the given date.
+func (s *Session) PreviousTradingDay(date time.Time) time.Time {
+	candidate := date.AddDate(0, 0, -1)
+	for i := 0; i < 14; i++ {
+		if s.tradingDay(candidate) {
+			return candidate
+		}
+		candidate = candidate.AddDate(0, 0, -1)
+	}
+	return candidate
+}
+
 // Close returns the close of the session on the given date.
 func (s *Session) Close(date time.Time) time.Time {
 	return s.closeFn(date)
@@ -72,23 +101,10 @@ func (s *Session) Anchor(now time.Time) time.Time {
 		if s.tradingDay(d) && !s.closeFn(d).After(now) {
 			return d
 		}
-		d = previousTradingDay(d, s.tradingDay)
+		d = s.PreviousTradingDay(d)
 	}
 	// Unreachable: the NYSE never closes for more than a week.
 	return d
-}
-
-// previousTradingDay returns the trading day strictly before the given
-// date.
-func previousTradingDay(date time.Time, tradingDay func(time.Time) bool) time.Time {
-	candidate := date.AddDate(0, 0, -1)
-	for i := 0; i < 14; i++ {
-		if tradingDay(candidate) {
-			return candidate
-		}
-		candidate = candidate.AddDate(0, 0, -1)
-	}
-	return candidate
 }
 
 // calendarStartOfDay returns midnight of the given date in the NYSE

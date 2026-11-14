@@ -4,6 +4,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -190,14 +191,23 @@ func (a *App) AddWarmup(symbol string, lookback int) error {
 
 // Run executes the configured mode (backtest or live).
 func (a *App) Run() error {
+	return a.RunContext(context.Background())
+}
+
+// RunContext runs the app until the context is cancelled.
+//
+// A live run blocks until its context is done, so a caller that wants
+// to stop a trading session - or a test that wants to drive one - needs
+// a context it can cancel.
+func (a *App) RunContext(ctx context.Context) error {
 	if err := a.resolve(); err != nil {
 		return err
 	}
 	switch {
 	case a.backtestCfg != nil:
-		return a.runBacktest()
+		return a.runBacktest(ctx)
 	case a.liveCfg != nil:
-		return a.runLive()
+		return a.runLive(ctx)
 	default:
 		return errors.New("app: configure WithBacktest or WithLive")
 	}

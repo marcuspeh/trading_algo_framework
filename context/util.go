@@ -41,3 +41,8 @@ func (e invalidArgError) Error() string {
 func errInvalid(msg string) error {
 	return invalidArgError{msg: msg}
 }
+
+// sessionKey renders a session's date as a cache key.
+func sessionKey(session time.Time) string {
+	return session.Format("2006-01-02")
+}

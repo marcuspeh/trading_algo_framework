@@ -114,7 +114,7 @@ func (a *App) resolveLive() error {
 	return nil
 }
 
-func (a *App) runBacktest() error {
+func (a *App) runBacktest(parent context.Context) error {
 	ctx, err := tfcontext.New(tfcontext.Options{
 		Clock:        a.clock,
 		Portfolio:    a.portfolio,
@@ -164,11 +164,11 @@ func (a *App) runBacktest() error {
 		"start", a.backtestCfg.Start.Format("2006-01-02"),
 		"end", a.backtestCfg.End.Format("2006-01-02"),
 	)
-	return engine.Run(context.Background(), ctx)
+	return engine.Run(parent, ctx)
 }
 
-// positionClockForWarmup moves the backtest clock to the last slot of
-// the first trading day.
+// positionClockForWarmup moves the backtest clock to the earliest slot
+// of the first trading day.
 //
 // The bar cache is keyed by the session the bars were fetched for, so
 // the warmup has to read the same session the first job will. At
@@ -176,10 +176,9 @@ func (a *App) runBacktest() error {
 // current one has not closed yet - and the warmed entry would be
 // discarded.
 //
-// The last slot is used rather than the first, because the last slot
-// of a day is the one whose session has closed: a job at the close
-// reads the day's own bar, and that is the series a strategy usually
-// wants warmed.
+// The earliest slot is used because the warmup exists for the first
+// job: it primes the session that job reads. Later jobs read other
+// sessions and fetch them for themselves.
 func (a *App) positionClockForWarmup() {
 	if a.btClock == nil || len(a.jobs) == 0 {
 		return
@@ -191,15 +190,15 @@ func (a *App) positionClockForWarmup() {
 		day = day.AddDate(0, 0, 1)
 	}
 
-	latest := time.Time{}
+	earliest := time.Time{}
 	for _, j := range a.jobs {
 		at := j.Time.Resolve(day)
-		if latest.IsZero() || at.After(latest) {
-			latest = at
+		if earliest.IsZero() || at.Before(earliest) {
+			earliest = at
 		}
 	}
-	if !latest.IsZero() {
-		a.btClock.Set(latest)
+	if !earliest.IsZero() {
+		a.btClock.Set(earliest)
 	}
 }
 
@@ -242,7 +241,7 @@ func (a *App) runWarmup(ctx job.Context) error {
 	return nil
 }
 
-func (a *App) runLive() error {
+func (a *App) runLive(parent context.Context) error {
 	ctx, err := tfcontext.New(tfcontext.Options{
 		Clock:        a.clock,
 		Portfolio:    a.portfolio,
@@ -267,6 +266,7 @@ func (a *App) runLive() error {
 		Portfolio:    a.portfolio.(*portfolio.Live),
 		Clock:        a.clock,
 		Session:      a.session,
+		Market:       a.market,
 		IsTradingDay: a.tradingDay,
 	})
 	if err != nil {
@@ -281,5 +281,5 @@ func (a *App) runLive() error {
 	}
 
 	a.logger.Info("live start")
-	return engine.Run(context.Background(), ctx)
+	return engine.Run(parent, ctx)
 }

@@ -140,11 +140,10 @@ func TestLiveExecutor_LimitOrderDefaultsToGTC(t *testing.T) {
 	}
 }
 
-// Every submission carries an idempotency key, and two submissions of
-// the same strategy order do not share one: the broker's idempotency
-// cache is shared across order types, so a reused key would return the
-// wrong response.
-func TestLiveExecutor_IdempotencyKeyIsFreshPerSubmission(t *testing.T) {
+// A strategy that gives its orders ids gets real idempotency: the same
+// order submitted twice carries the same key, so the broker returns the
+// first response rather than placing it twice.
+func TestLiveExecutor_SameOrderCarriesTheSameIdempotencyKey(t *testing.T) {
 	b := &fakeBroker{}
 	exec := execution.NewBroker(b)
 
@@ -159,11 +158,55 @@ func TestLiveExecutor_IdempotencyKeyIsFreshPerSubmission(t *testing.T) {
 	if len(b.keys) != 2 {
 		t.Fatalf("expected 2 keys, got %d", len(b.keys))
 	}
+	if b.keys[0] != b.keys[1] {
+		t.Error("the two submissions of the same order carried different keys")
+	}
+	if b.keys[0] == "" {
+		t.Error("an idempotency key was empty")
+	}
+}
+
+// The broker's idempotency cache is shared across the market, limit and
+// bracket endpoints, so the same id used for two different order types
+// must not carry the same key.
+func TestLiveExecutor_DifferentOrderTypesCarryDifferentKeys(t *testing.T) {
+	b := &fakeBroker{}
+	exec := execution.NewBroker(b)
+
+	limit := 100.0
+	market := order.Order{
+		ID: "signal-42", Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
+	}
+	limitOrder := order.Order{
+		ID: "signal-42", Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Limit, Limit: &limit,
+	}
+	if _, err := exec.Submit(context.Background(), market); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Submit(context.Background(), limitOrder); err != nil {
+		t.Fatal(err)
+	}
+	if b.keys[0] == b.keys[1] {
+		t.Error("a market order and a limit order shared an idempotency key")
+	}
+}
+
+// An order with no id cannot be recognised as a repeat, so it gets a
+// fresh key each time.
+func TestLiveExecutor_OrderWithoutAnIDCarriesAFreshKey(t *testing.T) {
+	b := &fakeBroker{}
+	exec := execution.NewBroker(b)
+
+	o := order.Order{
+		Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := exec.Submit(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if b.keys[0] == b.keys[1] {
 		t.Error("the two submissions shared an idempotency key")
-	}
-	if b.keys[0] == "" || b.keys[1] == "" {
-		t.Error("an idempotency key was empty")
 	}
 }
 

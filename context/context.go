@@ -49,16 +49,15 @@ type ctx struct {
 	broker     job.OrderBroker
 
 	barCacheMu sync.Mutex
-	barCache   map[string]barCacheEntry
+	barCache   map[string]map[string]barCacheEntry
 }
 
-// barCacheEntry holds the bars fetched for one symbol, along with the
-// date they were fetched for.
+// barCacheEntry holds the bars fetched for one symbol and one session.
 //
-// The date is recorded explicitly because the newest bar is dated by
+// The session is recorded explicitly because the newest bar is dated by
 // its trading day, which is often earlier than the day the fetch was
 // made - a fetch made on a Monday returns Friday's bar - so it cannot
-// stand in for "these bars were fetched for this day".
+// stand in for "these bars were fetched for this session".
 type barCacheEntry struct {
 	asOf time.Time
 	bars []order.Bar
@@ -84,7 +83,7 @@ func New(opts Options) (job.Context, error) {
 		tradingDay: opts.GetIsTradingDay(),
 		mode:       opts.GetMode(),
 		broker:     opts.Broker,
-		barCache:   map[string]barCacheEntry{},
+		barCache:   map[string]map[string]barCacheEntry{},
 	}, nil
 }
 
@@ -122,7 +121,7 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	asOf := c.session.Anchor(c.clock.Now())
 
 	c.barCacheMu.Lock()
-	cached, ok := c.barCache[symbol]
+	cached, ok := c.barCache[symbol][sessionKey(asOf)]
 	c.barCacheMu.Unlock()
 
 	// A cached entry is reusable when it was fetched for the same
@@ -143,7 +142,10 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	})
 
 	c.barCacheMu.Lock()
-	c.barCache[symbol] = barCacheEntry{asOf: asOf, bars: bars}
+	if c.barCache[symbol] == nil {
+		c.barCache[symbol] = map[string]barCacheEntry{}
+	}
+	c.barCache[symbol][sessionKey(asOf)] = barCacheEntry{asOf: asOf, bars: bars}
 	c.barCacheMu.Unlock()
 
 	if len(bars) < lookback {

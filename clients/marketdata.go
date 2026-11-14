@@ -205,7 +205,21 @@ func (m *Market) barsIn(ctx context.Context, symbol string, from, to time.Time) 
 
 	m.mu.Lock()
 	m.cache[symbol] = merged
-	m.coverage[symbol] = mergeCoverage(entry, needFrom, needTo)
+	// The covered range ends at the last bar the service actually
+	// returned, not at the end of the request. A session whose bar has
+	// not been published yet is then still outstanding, and the next
+	// request asks for it again.
+	//
+	// When the service returns nothing at all, nothing is recorded:
+	// the range has not been answered for, and the next request has to
+	// try again.
+	switch {
+	case len(fetched) > 0:
+		m.coverage[symbol] = mergeCoverage(entry, needFrom, fetched[len(fetched)-1].Timestamp)
+	case len(cached) > 0 && entry != nil:
+		// The service had nothing new; leave the coverage as it was.
+		m.coverage[symbol] = entry
+	}
 	m.mu.Unlock()
 
 	return merged, nil

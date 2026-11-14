@@ -76,3 +76,55 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 			forced, m.calls)
 	}
 }
+
+// A day can hold a job before the close and one at it. They read
+// different sessions - the previous one and the current one - and
+// neither may evict the other's cached bars.
+func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
+	m := &recordingMkt{}
+	a := app.NewApp(
+		app.WithBacktest(app.BacktestConfig{
+			Start:        time.Date(2024, 1, 3, 0, 0, 0, 0, calendar.NYSE),
+			End:          time.Date(2024, 1, 4, 0, 0, 0, 0, calendar.NYSE),
+			StartingCash: 10_000,
+			BarSource:    fakeBars{},
+		}),
+		app.WithMarketClient(m),
+		app.WithUniverseClient(fakeUniverse{}),
+		app.WithConfigClient(fakeConfig{}),
+	)
+	if err := a.AddWarmup("AAPL", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(name string) job.Handler {
+		return func(ctx job.Context, _ time.Time) ([]order.Order, error) {
+			_, _ = ctx.Bars("AAPL", 5)
+			return nil, nil
+		}
+	}
+	for _, j := range []job.Job{
+		{Name: "preopen", Time: job.Time(9, 0), Handler: read("preopen")},
+		{Name: "atclose", Time: job.AtClose(), Handler: read("atclose")},
+	} {
+		if err := a.RegisterJob(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first day is read by two jobs on two sessions, and the warmup
+	// covers the one the first job reads. So the first session is
+	// fetched once, not three times.
+	seen := map[string]int{}
+	for _, call := range m.calls {
+		seen[call.Format("2006-01-02")]++
+	}
+	for session, n := range seen {
+		if n > 1 {
+			t.Errorf("session %s was fetched %d times, want 1: %v", session, n, m.calls)
+		}
+	}
+}

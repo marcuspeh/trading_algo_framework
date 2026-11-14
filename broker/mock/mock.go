@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/broker"
-	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/order"
@@ -76,6 +75,29 @@ type Mock struct {
 // Compile-time proof that the mock satisfies the broker interface.
 var _ broker.Client = (*Mock)(nil)
 
+// orderKind says how an order triggers against a bar.
+//
+// A take-profit and a stop-loss are both protective legs of a bracket,
+// but they trigger in opposite directions: a take-profit on a long
+// fires when the price rises to it, and a stop-loss fires when the
+// price falls to it. Treating both as limit orders would make a
+// stop-loss fire on the wrong side of the market.
+type orderKind int
+
+const (
+	// kindEntry is a limit order: it fills when the market trades
+	// through its price.
+	kindEntry orderKind = iota
+
+	// kindTakeProfit is a protective limit: it fills when the market
+	// reaches the target in the trade's favour.
+	kindTakeProfit
+
+	// kindStopLoss is a protective stop: it fills when the market
+	// reaches the stop against the trade.
+	kindStopLoss
+)
+
 // restingOrder is an order waiting to fill.
 type restingOrder struct {
 	id       int
@@ -107,6 +129,9 @@ type restingOrder struct {
 	// group links the legs of a bracket together, so that when one
 	// fills the others are cancelled - as a real bracket's are.
 	group int
+
+	// kind says how the order triggers.
+	kind orderKind
 
 	// filledAt is the price the order filled at, when it filled.
 	filledAt float64
@@ -348,6 +373,15 @@ func (m *Mock) AdvanceSession(session time.Time) {
 		}
 		o.lastEvaluated = session
 
+		// A day order expires at the close of the session it was
+		// submitted for, whether or not the market has a bar for it.
+		// The expiry must not wait on the market data.
+		if o.order.TimeInForce() == "DAY" && !session.After(o.evaluableFrom) {
+			delete(m.orders, id)
+			m.finalStatus[id] = "Cancelled"
+			continue
+		}
+
 		bar, ok := m.bar(o.order.Symbol, session)
 		if !ok {
 			continue
@@ -363,14 +397,6 @@ func (m *Mock) AdvanceSession(session time.Time) {
 			// An entry that filled brings its protective legs to life.
 			m.armProtectiveLegs(o, session)
 			continue
-		}
-
-		// A day order expires at the close of the session it was
-		// submitted for. The session it was submitted in is the one
-		// before the session it is first evaluated against.
-		if o.order.TimeInForce() == "DAY" && !session.After(o.evaluableFrom) {
-			delete(m.orders, id)
-			m.finalStatus[id] = "Cancelled"
 		}
 	}
 }
@@ -420,7 +446,7 @@ func (m *Mock) armProtectiveLegs(parent *restingOrder, session time.Time) {
 	// after the entry filled.
 	evaluableFrom := m.nextSessionToClose(m.session.Close(session))
 
-	arm := func(limit float64) {
+	arm := func(limit float64, kind orderKind) {
 		if limit <= 0 {
 			return
 		}
@@ -440,10 +466,11 @@ func (m *Mock) armProtectiveLegs(parent *restingOrder, session time.Time) {
 			side:          opposite(parent.side),
 			evaluableFrom: evaluableFrom,
 			group:         parent.group,
+			kind:          kind,
 		}
 	}
-	arm(parent.takeProfit)
-	arm(parent.stopLoss)
+	arm(parent.takeProfit, kindTakeProfit)
+	arm(parent.stopLoss, kindStopLoss)
 }
 
 // statusOf reports the status of an order.
@@ -469,13 +496,15 @@ func (m *Mock) statusOf(id int) string {
 // close, is first evaluated against the next session.
 func (m *Mock) nextSessionToClose(now time.Time) time.Time {
 	anchor := m.session.Anchor(now)
-	next := calendar.NextTradingDay(anchor)
 	// If the anchor is today's session and the close has not yet
 	// passed, today's session is the one that closes next.
 	if closeOf := m.session.Close(anchor); closeOf.After(now) {
 		return anchor
 	}
-	return next
+	// The session's own calendar decides what the next session is,
+	// not the built-in one: a strategy may run on a different
+	// exchange's days.
+	return m.session.NextTradingDay(anchor)
 }
 
 // fillAgainst fills the order if the bar trades through its limit.
@@ -493,7 +522,22 @@ func (o *restingOrder) fillAgainst(bar order.Bar) bool {
 //
 // A limit order never fills at a worse price than its limit: a buy at
 // 102 that finds the session opened at 90 fills at 90.
+//
+// A stop is the other way round: a stop at 95 that finds the session
+// opened at 90 fills at 90, because the market gapped through it.
 func (o *restingOrder) fillPriceForLimit(bar order.Bar) float64 {
+	if o.kind == kindStopLoss {
+		if o.side == order.Buy {
+			if bar.Open > 0 && bar.Open > o.limit {
+				return bar.Open
+			}
+			return o.limit
+		}
+		if bar.Open > 0 && bar.Open < o.limit {
+			return bar.Open
+		}
+		return o.limit
+	}
 	if o.side == order.Buy {
 		if bar.Open > 0 && bar.Open < o.limit {
 			return bar.Open
@@ -522,8 +566,16 @@ func opposite(s order.Side) order.Side {
 	return order.Buy
 }
 
-// limitTriggered reports whether the bar traded through the limit.
+// limitTriggered reports whether the bar triggered the order.
 func (o *restingOrder) limitTriggered(bar order.Bar) bool {
+	if o.kind == kindStopLoss {
+		// A stop is triggered by the market moving against the
+		// trade: a long's stop fires when the price falls to it.
+		if o.side == order.Buy {
+			return bar.High >= o.limit
+		}
+		return bar.Low <= o.limit
+	}
 	if o.side == order.Buy {
 		return bar.Low <= o.limit
 	}

@@ -421,3 +421,98 @@ func TestMock_RepeatedKeyReportsTheRealStatus(t *testing.T) {
 		t.Errorf("status=%q want Cancelled", again.Status)
 	}
 }
+
+// A stop-loss fires when the market falls through it, and fills at the
+// stop or worse.
+//
+// Arming the stop as a limit order on the opposite side would fire it
+// when the price rose to the stop instead, and would leave the
+// position unprotected exactly when it needed protecting.
+func TestMock_StopLossFiresOnADecline(t *testing.T) {
+	at := time.Date(2024, 1, 3, 16, 0, 0, 0, calendar.NYSE)
+	p := portfolio.NewBacktest(10_000)
+	m := mock.New(mock.Config{
+		Portfolio: p,
+		Bars: bars{
+			// The entry fills here.
+			"2024-01-04": {Timestamp: day(2024, 1, 4), Open: 100, High: 105, Low: 96, Close: 100},
+			// The next session crashes through the 95 stop.
+			"2024-01-05": {Timestamp: day(2024, 1, 5), Open: 94, High: 94, Low: 80, Close: 82},
+		},
+		Session: session(t, at),
+	})
+
+	if _, err := m.PlaceBracketOrder(context.Background(), broker.BracketOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+		LmtPrice:  102,
+		TPPrice:   120,
+		SLPrice:   95,
+		ParentTIF: "GTC",
+	}, "key-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The entry fills and the position opens.
+	m.AdvanceSession(day(2024, 1, 4))
+	if got := p.Position("AAPL").Quantity; got != 10 {
+		t.Fatalf("quantity=%f want 10", got)
+	}
+
+	// The market falls through the stop and the position closes.
+	m.AdvanceSession(day(2024, 1, 5))
+	if got := p.Position("AAPL").Quantity; got != 0 {
+		t.Fatalf("the stop did not fire: quantity=%f", got)
+	}
+	// The entry filled at 100 and the stop at 94, the session's open,
+	// which is below the stop.
+	if got, want := p.Cash(), float64(10_000-10*100+10*94); got != want {
+		t.Errorf("cash=%f want %f", got, want)
+	}
+}
+
+// A take-profit fires when the market rises through it.
+func TestMock_TakeProfitFiresOnARise(t *testing.T) {
+	at := time.Date(2024, 1, 3, 16, 0, 0, 0, calendar.NYSE)
+	p := portfolio.NewBacktest(10_000)
+	m := mock.New(mock.Config{
+		Portfolio: p,
+		Bars: bars{
+			"2024-01-04": {Timestamp: day(2024, 1, 4), Open: 100, High: 105, Low: 96, Close: 100},
+			"2024-01-05": {Timestamp: day(2024, 1, 5), Open: 110, High: 125, Low: 108, Close: 122},
+		},
+		Session: session(t, at),
+	})
+
+	if _, err := m.PlaceBracketOrder(context.Background(), broker.BracketOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+		LmtPrice:  102,
+		TPPrice:   120,
+		SLPrice:   95,
+		ParentTIF: "GTC",
+	}, "key-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.AdvanceSession(day(2024, 1, 4))
+	if got := p.Position("AAPL").Quantity; got != 10 {
+		t.Fatalf("quantity=%f want 10", got)
+	}
+
+	m.AdvanceSession(day(2024, 1, 5))
+	if got := p.Position("AAPL").Quantity; got != 0 {
+		t.Fatalf("the take-profit did not fire: quantity=%f", got)
+	}
+	// The entry filled at 100 and the take-profit at 120, the target,
+	// not at the session's open of 110.
+	if got, want := p.Cash(), float64(10_000-10*100+10*120); got != want {
+		t.Errorf("cash=%f want %f", got, want)
+	}
+}
