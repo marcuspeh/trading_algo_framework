@@ -263,11 +263,35 @@ plain order.
 The default time in force is `GTC`, so a resting limit order survives the
 session - the same in backtest and live.
 
-Every submission carries a freshly minted idempotency key. The broker's
-idempotency cache is shared across its market, limit and bracket endpoints,
-so a key reused across two order types would return the first response to
-the second call; the key is minted per submission rather than taken from the
-strategy's order id, which travels as the broker's order reference instead.
+A strategy that gives its orders ids gets idempotency: the same order
+submitted twice carries the same key, so the broker returns the first
+response rather than placing it twice. The order type is part of the key,
+because the broker's idempotency cache is shared across its market, limit
+and bracket endpoints - a market order and a limit order sharing an id
+must not collide there. The strategy's order id travels to the broker as
+the order reference.
+
+### How a backtest fills
+
+The backtest fills against daily bars, which is worth knowing before
+reading a result:
+
+- A **market order** fills at the close of the session the strategy is
+  anchored to. A job that fires before the close is anchored to the
+  previous session, so its market order fills at that session's close -
+  the price the strategy read. In live the same order fills at the live
+  market price, so an overnight gap is captured in live but not in a
+  backtest.
+- A **limit order** rests and is first evaluated against the session
+  that closes after it was submitted, never against a session that
+  closed before it existed. It fills at its limit, or better if the
+  session opened through it.
+- A **bracket's take-profit** fires when the market reaches the target,
+  and its **stop-loss** when the market reaches the stop - a stop fills
+  at the stop or worse, so a session that opened through it fills at the
+  open.
+- A **day order** expires at the close of the session it was submitted
+  for, whether or not the market has a bar for it.
 
 ### Transaction costs
 
@@ -352,6 +376,27 @@ trading-framework/
 ├── scheduler/   # Scheduler interface + Backtest/Real
 └── universe/    # universe.Client interface
 ```
+
+## Known limits
+
+- The backtest fills against daily bars, so a market order placed
+  before the close fills at the last completed close rather than at the
+  live price. A live run captures an overnight gap; a backtest does not.
+- Live positions are refreshed from the broker before each job, so a
+  position that appears between two jobs is not visible until the next
+  one.
+- Live cash is derived from the net asset value and the position marks,
+  which are daily closes. It drifts from the broker's own cash during a
+  session, and it is unknown rather than wrong when a position has no
+  mark.
+- The market-data service publishes a session's bar after the session
+  closes, so a job at the close may find that day's bar missing and
+  read the previous session's instead.
+- The exchange's early closes are computed by rule and checked against
+  the published calendars for 2025 through 2028. `WithMarketCloseFunc`
+  replaces them if the house view differs.
+- Intraday (minute and hour) bars are not supported. A job may run
+  during the session, but it reads daily bars.
 
 ## Testing
 
