@@ -146,6 +146,14 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 		c.barCache[symbol] = map[string]barCacheEntry{}
 	}
 	c.barCache[symbol][sessionKey(asOf)] = barCacheEntry{asOf: asOf, bars: bars}
+	// The anchor only moves forward, so a session older than this one
+	// will never be read again. Dropping it keeps the cache the size of
+	// the symbols in play rather than the size of the backtest.
+	for key := range c.barCache[symbol] {
+		if key < sessionKey(asOf) {
+			delete(c.barCache[symbol], key)
+		}
+	}
 	c.barCacheMu.Unlock()
 
 	if len(bars) < lookback {
