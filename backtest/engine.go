@@ -11,7 +11,6 @@ import (
 
 	"github.com/marcuspeh/go-tools/util"
 	"github.com/marcuspeh/trading-framework/clock"
-	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/market"
@@ -133,7 +132,6 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		if err := parent.Err(); err != nil {
 			return nil
 		}
-		tfcontext.Reset(jc)
 
 		// The exchange is closed on weekends and holidays: no job
 		// fires, no mark-to-market happens, and resting orders are not

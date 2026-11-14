@@ -6,6 +6,7 @@ package context
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type Logger = job.Logger
 
 type ctx struct {
 	clock      clock.Clock
+	session    *clock.Session
 	portfolio  Portfolio
 	market     MarketClient
 	universe   universe.Client
@@ -74,6 +76,7 @@ func New(opts Options) (job.Context, error) {
 
 	return &ctx{
 		clock:      opts.Clock,
+		session:    opts.GetSession(),
 		portfolio:  opts.Portfolio,
 		market:     opts.Market,
 		universe:   opts.Universe,
@@ -98,6 +101,17 @@ func (c *ctx) Mode() job.Mode {
 	return c.mode
 }
 
+// Bars returns the most recent bars for a symbol, ending on the
+// session the clock is anchored to.
+//
+// The anchor is the most recent session whose close has passed, so a
+// job that fires before the close reads the previous session and a job
+// that fires at or after the close reads the current one. A strategy
+// can never see a bar that had not been printed yet.
+//
+// A request for more bars than the service has returns
+// job.ErrInsufficientBars rather than a short history, so an
+// indicator is never silently computed over fewer bars than asked for.
 func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	if lookback <= 0 {
 		return nil, errInvalid("lookback must be > 0")
@@ -106,16 +120,16 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 		return nil, errInvalid("symbol is required")
 	}
 
-	asOf := c.clock.Today()
+	asOf := c.session.Anchor(c.clock.Now())
 
 	c.barCacheMu.Lock()
 	cached, ok := c.barCache[symbol]
 	c.barCacheMu.Unlock()
 
-	// A cached entry is reusable when it was fetched for the same day
-	// and holds at least as many bars as were asked for. Anything else
-	// - a different day, or a shorter history than requested - needs a
-	// fresh fetch.
+	// A cached entry is reusable when it was fetched for the same
+	// session and holds at least as many bars as were asked for.
+	// Anything else - a different session, or a shorter history than
+	// requested - needs a fresh fetch.
 	if ok && sameDate(cached.asOf, asOf) && len(cached.bars) >= lookback {
 		return cloneBars(cached.bars[len(cached.bars)-lookback:]), nil
 	}
@@ -133,6 +147,10 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	c.barCache[symbol] = barCacheEntry{asOf: asOf, bars: bars}
 	c.barCacheMu.Unlock()
 
+	if len(bars) < lookback {
+		return nil, fmt.Errorf("%w: %s has %d bars, %d requested",
+			job.ErrInsufficientBars, symbol, len(bars), lookback)
+	}
 	if len(bars) > lookback {
 		bars = bars[len(bars)-lookback:]
 	}
@@ -207,16 +225,7 @@ func (c *ctx) UpdateOrder(orderID string, limit float64) error {
 	return c.broker.Update(context.Background(), orderID, limit)
 }
 
-func (c *ctx) reset() {
-	c.barCacheMu.Lock()
-	defer c.barCacheMu.Unlock()
-	c.barCache = map[string]barCacheEntry{}
-}
-
-// Reset clears the per-Context bar cache. The engine calls this when the
-// date rolls forward so the next Bars() call refetches.
-func Reset(c job.Context) {
-	if rc, ok := c.(interface{ reset() }); ok {
-		rc.reset()
-	}
-}
+// The bar cache is keyed by the session the bars were fetched for, so
+// it invalidates itself when the session rolls forward. There is no
+// reset to call: a job that reads the same session twice is served
+// from the cache, and a job that reads a new session is not.

@@ -99,6 +99,12 @@ type Logger interface {
 // not available.
 var ErrNotFound = errors.New("not found")
 
+// ErrInsufficientBars is returned when a symbol has fewer bars than
+// were asked for. The caller gets an error rather than a short
+// history, so an indicator is never silently computed over fewer bars
+// than the strategy asked for.
+var ErrInsufficientBars = errors.New("insufficient bar history")
+
 // ErrInvalidJob is returned when a Job fails validation.
 type ErrInvalidJob struct {
 	Name   string

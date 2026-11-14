@@ -22,6 +22,20 @@ type Options struct {
 	// optional: without it, OpenOrders, CancelOrder and UpdateOrder
 	// report a missing dependency.
 	Broker job.OrderBroker
+
+	// Session resolves the session a timestamp belongs to. When nil, a
+	// Session is built from the Clock, the default market close and
+	// the trading-day predicate.
+	Session *clock.Session
+}
+
+// GetSession returns the configured Session, building a default one
+// from the Clock and the trading-day predicate when none was supplied.
+func (opts *Options) GetSession() *clock.Session {
+	if opts.Session != nil {
+		return opts.Session
+	}
+	return clock.NewSession(opts.Clock, nil, opts.GetIsTradingDay())
 }
 
 func (opts *Options) Validate() error {

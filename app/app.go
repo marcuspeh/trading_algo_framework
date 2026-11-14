@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/marcuspeh/trading-framework/backtest"
 	"github.com/marcuspeh/trading-framework/clock"
@@ -127,6 +129,7 @@ func (a *App) runBacktest() error {
 		}
 	}
 
+	a.positionClockForWarmup()
 	if err := a.runWarmup(ctx); err != nil {
 		return fmt.Errorf("app: warmup: %w", err)
 	}
@@ -138,9 +141,44 @@ func (a *App) runBacktest() error {
 	return engine.Run(context.Background(), ctx)
 }
 
+// positionClockForWarmup moves the backtest clock to the first slot of
+// the first trading day.
+//
+// The bar cache is keyed by the session the bars were fetched for, so
+// the warmup has to read the same session the first job will. At
+// midnight the anchor would still be the previous session - the
+// current one has not closed yet - and the warmed entry would be
+// discarded.
+func (a *App) positionClockForWarmup() {
+	if a.btClock == nil || len(a.jobs) == 0 {
+		return
+	}
+
+	day := clock.NYSETime(a.backtestCfg.Start)
+	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, clock.NYSE)
+	for i := 0; i < 14 && !a.tradingDay(day); i++ {
+		day = day.AddDate(0, 0, 1)
+	}
+
+	earliest := time.Time{}
+	for _, j := range a.jobs {
+		at := j.Time.Resolve(day)
+		if earliest.IsZero() || at.Before(earliest) {
+			earliest = at
+		}
+	}
+	if !earliest.IsZero() {
+		a.btClock.Set(earliest)
+	}
+}
+
 // runWarmup prefetches the history each warmup entry asks for and primes
 // the Context's bar cache with it, so the first Job of the first day does
 // not pay for a cold fetch.
+//
+// A symbol with a shorter history than was asked for is a warning, not
+// a failure: the backtest is still worth running, and the strategy will
+// see the same shortfall when it asks for the history itself.
 func (a *App) runWarmup(ctx job.Context) error {
 	a.mu.Lock()
 	entries := make([]warmupEntry, len(a.warmup))
@@ -150,6 +188,14 @@ func (a *App) runWarmup(ctx job.Context) error {
 	for _, w := range entries {
 		bars, err := ctx.Bars(w.Symbol, w.Lookback)
 		if err != nil {
+			if errors.Is(err, job.ErrInsufficientBars) {
+				a.logger.Warn("warmup has a short history",
+					"symbol", w.Symbol,
+					"lookback", w.Lookback,
+					"err", err.Error(),
+				)
+				continue
+			}
 			return fmt.Errorf("warmup %s: %w", w.Symbol, err)
 		}
 		a.logger.Info("warmup complete",

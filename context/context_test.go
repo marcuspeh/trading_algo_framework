@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
@@ -92,15 +93,35 @@ func TestContext_TodayAndNowFromClock(t *testing.T) {
 	}
 }
 
-func TestContext_BarsUsesClockDate(t *testing.T) {
-	today := time.Date(2024, 1, 2, 14, 30, 0, 0, time.UTC)
+// Bars resolve their date through the session anchor, not the clock's
+// date. A job that fires before the close reads the previous session,
+// because the current one has not happened yet.
+func TestContext_BarsUsesTheSessionAnchor(t *testing.T) {
+	// 14:30 ET on 2024-01-02 - before the close, so the anchor is the
+	// previous session, 2024-01-01.
+	now := time.Date(2024, 1, 2, 14, 30, 0, 0, clock.NYSE)
 	mkt := &fakeMarket{}
-	c, err := newCtx(t, mkt, &fakeUniverse{}, today)
+	c, err := newCtx(t, mkt, &fakeUniverse{}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = c.Bars("AAPL", 5)
-	want := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	want := time.Date(2024, 1, 1, 0, 0, 0, 0, clock.NYSE)
+	if !mkt.asOf.Equal(want) {
+		t.Fatalf("Bars asOf=%v want %v", mkt.asOf, want)
+	}
+}
+
+// At or after the close, the anchor is the current session.
+func TestContext_BarsAfterTheCloseUsesTheCurrentSession(t *testing.T) {
+	now := time.Date(2024, 1, 2, 16, 0, 0, 0, clock.NYSE)
+	mkt := &fakeMarket{}
+	c, err := newCtx(t, mkt, &fakeUniverse{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c.Bars("AAPL", 5)
+	want := time.Date(2024, 1, 2, 0, 0, 0, 0, clock.NYSE)
 	if !mkt.asOf.Equal(want) {
 		t.Fatalf("Bars asOf=%v want %v", mkt.asOf, want)
 	}
