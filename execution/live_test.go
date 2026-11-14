@@ -95,7 +95,7 @@ func (f *fakeBroker) GetAccountNAV(_ context.Context) (*execution.AccountNAVResp
 
 func TestLiveExecutor_SubmitMarket(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	res, err := exec.Submit(context.Background(), order.Order{
 		Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
 	})
@@ -112,7 +112,7 @@ func TestLiveExecutor_SubmitMarket(t *testing.T) {
 
 func TestLiveExecutor_SubmitLimit(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	limit := 99.0
 	_, err := exec.Submit(context.Background(), order.Order{
 		Symbol: "AAPL", Side: order.Sell, Quantity: 5, Type: order.Limit, Limit: &limit,
@@ -127,7 +127,7 @@ func TestLiveExecutor_SubmitLimit(t *testing.T) {
 
 func TestLiveExecutor_Cancel(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	if err := exec.Cancel(context.Background(), "42"); err != nil {
 		t.Fatal(err)
 	}

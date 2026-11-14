@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcuspeh/go-tools/util"
 	"github.com/marcuspeh/trading-framework/clock"
+	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/market"
@@ -31,6 +32,12 @@ type Engine struct {
 	logger       job.Logger
 	handler      scheduler.Handler
 	isTradingDay portfolio.TradingDayFunc
+	session      *clock.Session
+	broker       broker.SessionAdvancer
+
+	// lastSession is the most recent session the resting orders have
+	// been evaluated against.
+	lastSession time.Time
 
 	start time.Time
 	end   time.Time
@@ -55,6 +62,15 @@ type Config struct {
 	// IsTradingDay decides which dates are trading days. Jobs do not
 	// fire on a non-trading day. When nil, every day is a trading day.
 	IsTradingDay portfolio.TradingDayFunc
+
+	// Session resolves the session a timestamp belongs to. It must be
+	// the same Session the Context was built with.
+	Session *clock.Session
+
+	// Broker is the simulated broker. When it implements
+	// broker.SessionAdvancer, the engine tells it when a session has
+	// closed so it can evaluate the orders resting at it.
+	Broker broker.SessionAdvancer
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -99,6 +115,8 @@ func New(cfg Config) (*Engine, error) {
 		start:        util.GetDay(cfg.Start),
 		end:          util.GetDay(cfg.End),
 		isTradingDay: isTradingDay,
+		session:      cfg.Session,
+		broker:       cfg.Broker,
 	}
 	e.handler = pipeline.Handler(cfg.Risk, cfg.Executor, cfg.Logger)
 	return e, nil
@@ -134,25 +152,37 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		}
 
 		// The exchange is closed on weekends and holidays: no job
-		// fires, no mark-to-market happens, and resting orders are not
-		// re-evaluated, because there is no bar for the day.
+		// fires and no mark-to-market happens, because there is no bar
+		// for the day.
 		if !e.isTradingDay(cur) {
 			continue
 		}
 
-		// Give resting orders from previous days a chance to trigger
-		// against today's bar before the day's jobs run.
-		e.advanceRestingOrders(cur)
-
 		for _, at := range e.slotsOn(cur) {
 			e.clock.Set(at)
-			e.markToMarket(cur)
+
+			// A session's bar is final at its close, so any session
+			// that has closed is evaluated before the job runs. A
+			// job at the close therefore sees the fills that session
+			// produced.
+			anchor := e.anchor(at)
+			e.advanceSessions(anchor)
+
+			e.markToMarket(anchor)
 			if err := e.scheduler.FireAt(parent, jc, e.handler, at); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// anchor returns the session a timestamp belongs to.
+func (e *Engine) anchor(at time.Time) time.Time {
+	if e.session != nil {
+		return e.session.Anchor(at)
+	}
+	return at
 }
 
 // slotsOn returns the distinct slot times for the given day, in
@@ -180,15 +210,48 @@ func (e *Engine) slotsOn(day time.Time) []time.Time {
 	return out
 }
 
-// advanceRestingOrders retries unfilled orders against the given day's
-// bar, so limit orders are good-till-cancelled rather than expiring on
-// the day they were submitted.
-func (e *Engine) advanceRestingOrders(date time.Time) {
-	bt, ok := e.executor.(*execution.Backtest)
-	if !ok {
+// advanceRestingOrders evaluates the orders resting at the broker
+// against a session's bar.
+//
+// A session's bar is final at its close, so the engine evaluates it
+// as soon as the simulated time passes the close. A limit order that
+// did not trigger keeps resting, which is what makes it good-till-
+// cancelled.
+func (e *Engine) advanceRestingOrders(session time.Time) {
+	if e.broker == nil {
 		return
 	}
-	bt.AdvanceDay(date)
+	e.broker.AdvanceSession(session)
+}
+
+// advanceSessions evaluates every session that has closed but has not
+// been evaluated yet.
+//
+// A session is evaluated once, in order, so an order is never
+// evaluated twice against the same bar.
+func (e *Engine) advanceSessions(to time.Time) {
+	if e.broker == nil || e.session == nil {
+		return
+	}
+	if e.lastSession.IsZero() {
+		e.lastSession = e.session.Anchor(e.start)
+	}
+	for s := e.nextSession(e.lastSession); !s.After(to); s = e.nextSession(s) {
+		e.advanceRestingOrders(s)
+		e.lastSession = s
+	}
+}
+
+// nextSession returns the trading day after the given one.
+func (e *Engine) nextSession(after time.Time) time.Time {
+	candidate := after.AddDate(0, 0, 1)
+	for i := 0; i < 14; i++ {
+		if e.isTradingDay(candidate) {
+			return candidate
+		}
+		candidate = candidate.AddDate(0, 0, 1)
+	}
+	return candidate
 }
 
 func (e *Engine) markToMarket(date time.Time) {

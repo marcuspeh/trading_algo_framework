@@ -57,7 +57,7 @@ func TestBrokerRequest_WireFormat(t *testing.T) {
 // expects, and refuse a fractional one rather than truncating it.
 func TestLiveExecutor_RejectsFractionalQuantity(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	_, err := exec.Submit(context.Background(), order.Order{
 		Symbol: "AAPL", Side: order.Buy, Quantity: 10.5, Type: order.Market,
 	})
@@ -73,7 +73,7 @@ func TestLiveExecutor_RejectsFractionalQuantity(t *testing.T) {
 // order's time in force carried on the parent.
 func TestLiveExecutor_BracketOrder(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	limit, tp, sl := 186.0, 190.0, 180.0
 	res, err := exec.Submit(context.Background(), order.Order{
@@ -105,7 +105,7 @@ func TestLiveExecutor_BracketOrder(t *testing.T) {
 // bracket, and must be rejected rather than silently degraded.
 func TestLiveExecutor_BracketWithoutLimitIsRejected(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	tp, sl := 190.0, 180.0
 	_, err := exec.Submit(context.Background(), order.Order{
@@ -124,7 +124,7 @@ func TestLiveExecutor_BracketWithoutLimitIsRejected(t *testing.T) {
 // same as the backtest.
 func TestLiveExecutor_LimitOrderDefaultsToGTC(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	limit := 100.0
 	if _, err := exec.Submit(context.Background(), order.Order{
@@ -146,7 +146,7 @@ func TestLiveExecutor_LimitOrderDefaultsToGTC(t *testing.T) {
 // wrong response.
 func TestLiveExecutor_IdempotencyKeyIsFreshPerSubmission(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	o := order.Order{
 		ID: "signal-42", Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
@@ -171,7 +171,7 @@ func TestLiveExecutor_IdempotencyKeyIsFreshPerSubmission(t *testing.T) {
 // human can reconcile the broker's orders with the strategy's.
 func TestLiveExecutor_OrderRefCarriesTheStrategyID(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	if _, err := exec.Submit(context.Background(), order.Order{
 		ID: "signal-42", Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
@@ -187,7 +187,7 @@ func TestLiveExecutor_OrderRefCarriesTheStrategyID(t *testing.T) {
 // id is an error rather than a silent no-op.
 func TestLiveExecutor_UpdateOrder(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 
 	if err := exec.Update(context.Background(), "42", 99.5); err != nil {
 		t.Fatal(err)

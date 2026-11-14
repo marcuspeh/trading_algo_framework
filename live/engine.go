@@ -27,6 +27,7 @@ type Engine struct {
 	executor   execution.Executor
 	portfolio  *portfolio.Live
 	broker     execution.Client
+	session    *clock.Session
 	risk       risk.Manager
 	logger     job.Logger
 	reconciler *execution.Reconciler
@@ -35,12 +36,14 @@ type Engine struct {
 // Config configures a live Engine.
 type Config struct {
 	Broker       execution.Client
+	Executor     execution.Executor
 	Market       market.Client
 	Universe     universe.Client
 	Config       job.Config
 	Logger       job.Logger
 	Risk         risk.Manager
 	Clock        clock.Clock
+	Session      *clock.Session
 	Portfolio    *portfolio.Live
 	IsTradingDay func(time.Time) bool
 }
@@ -55,6 +58,9 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.NewReal()
 	}
+	if cfg.Session == nil {
+		cfg.Session = clock.NewSession(cfg.Clock, nil, cfg.IsTradingDay)
+	}
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("live: Logger is required")
 	}
@@ -65,6 +71,13 @@ func New(cfg Config) (*Engine, error) {
 		cfg.IsTradingDay = func(time.Time) bool { return true }
 	}
 
+	// The executor is the same one a backtest uses, so both modes
+	// translate an order the same way.
+	executor := cfg.Executor
+	if executor == nil {
+		executor = execution.NewBroker(cfg.Broker)
+	}
+
 	sched := scheduler.NewReal(cfg.Clock, cfg.Logger)
 	// Jobs do not fire on a day the exchange is closed.
 	sched.SetTradingDay(cfg.IsTradingDay)
@@ -72,9 +85,10 @@ func New(cfg Config) (*Engine, error) {
 	return &Engine{
 		clock:      cfg.Clock,
 		scheduler:  sched,
-		executor:   execution.NewLive(cfg.Broker),
+		executor:   executor,
 		portfolio:  cfg.Portfolio,
 		broker:     cfg.Broker,
+		session:    cfg.Session,
 		risk:       cfg.Risk,
 		logger:     cfg.Logger,
 		reconciler: execution.NewReconciler(cfg.Broker, cfg.Portfolio, cfg.Logger),

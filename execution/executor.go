@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/order"
 )
 
@@ -33,6 +34,7 @@ type CostModel interface {
 }
 
 // BarProvider supplies the daily bar for a symbol on a given date.
-type BarProvider interface {
-	Bar(symbol string, date time.Time) (order.Bar, bool)
-}
+//
+// It lives in the market package, where the market-data contract
+// belongs; the alias keeps the name available here.
+type BarProvider = market.BarProvider

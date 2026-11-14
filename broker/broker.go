@@ -14,9 +14,23 @@ package broker
 
 import (
 	"context"
+	"time"
 
 	ibkrproxy "github.com/marcuspeh/ibkr-proxy/sdk/go"
 )
+
+// SessionAdvancer is implemented by a broker that simulates fills as
+// trading sessions close.
+//
+// Only the mock broker implements it - a live broker fills against the
+// real market - but the backtest engine needs to tell a simulated
+// broker that a session has closed, so it can evaluate the orders
+// resting at it.
+type SessionAdvancer interface {
+	// AdvanceSession evaluates the resting orders against the given
+	// session's bar.
+	AdvanceSession(session time.Time)
+}
 
 // Client is the surface the framework needs from a broker.
 //

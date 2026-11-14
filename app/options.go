@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/backtest"
+	"github.com/marcuspeh/trading-framework/broker/mock"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
@@ -35,6 +36,7 @@ type App struct {
 
 	clock      clock.Clock
 	btClock    *clock.BacktestClock
+	session    *clock.Session
 	executor   execution.Executor
 	portfolio  portfolio.Portfolio
 	risk       RiskManager
@@ -54,6 +56,9 @@ type App struct {
 
 	// liveBroker is the broker used by the live stack.
 	liveBroker execution.Client
+
+	// btBroker is the simulated broker used by the backtest stack.
+	btBroker *mock.Mock
 
 	jobs   []job.Job
 	warmup []warmupEntry

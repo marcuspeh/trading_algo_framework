@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/backtest"
+	"github.com/marcuspeh/trading-framework/broker/mock"
 	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
+	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
 )
@@ -37,9 +39,6 @@ func (a *App) resolveBacktest() error {
 	if !cfg.End.After(cfg.Start) {
 		return fmt.Errorf("app: backtest: End must be after Start")
 	}
-	if cfg.BarSource == nil {
-		return fmt.Errorf("app: backtest: BarSource is required")
-	}
 	if a.market == nil {
 		return fmt.Errorf("app: backtest: market client is required (WithMarketClient)")
 	}
@@ -50,16 +49,39 @@ func (a *App) resolveBacktest() error {
 		return fmt.Errorf("app: backtest: config client is required (WithConfigClient)")
 	}
 
+	// The fill model reads prices from the same market client the
+	// strategy reads them from, so the backtest can never simulate
+	// against prices the strategy never saw.
+	bars := cfg.BarSource
+	if bars == nil {
+		provider, ok := a.market.(market.BarProvider)
+		if !ok {
+			return fmt.Errorf(
+				"app: backtest: the market client must implement market.BarProvider " +
+					"to be used as the bar source, or supply BacktestConfig.BarSource")
+		}
+		bars = provider
+	}
+
 	a.btClock = clock.NewBacktest(clock.StartOfDay(cfg.Start))
 	a.clock = a.btClock
 	a.portfolio = portfolio.NewBacktest(cfg.StartingCash)
-	fill := &execution.DefaultFill{
-		Bars:               cfg.BarSource,
-		SlippageBps:        cfg.SlippageBps,
-		Commission:         cfg.Commission,
+
+	// One session, shared by the context, the engine and the mock
+	// broker, so they cannot disagree about which session a timestamp
+	// belongs to.
+	a.session = clock.NewSession(a.btClock, nil, a.tradingDay)
+
+	mockBroker := mock.New(mock.Config{
+		Portfolio:         a.portfolio.(*portfolio.Backtest),
+		Bars:              bars,
+		Session:           a.session,
+		SlippageBps:       cfg.SlippageBps,
+		Commission:        cfg.Commission,
 		CommissionPerShare: cfg.CommissionPerShare,
-	}
-	a.executor = execution.NewBacktest(a.portfolio.(*portfolio.Backtest), fill, a.btClock)
+	})
+	a.btBroker = mockBroker
+	a.executor = execution.NewBroker(mockBroker)
 	if a.risk == nil {
 		a.risk = risk.NewBasic()
 	}
@@ -82,8 +104,9 @@ func (a *App) resolveLive() error {
 	}
 
 	a.clock = clock.NewReal()
+	a.session = clock.NewSession(a.clock, nil, a.tradingDay)
 	a.portfolio = portfolio.NewLive()
-	a.executor = execution.NewLive(cfg.Broker)
+	a.executor = execution.NewBroker(cfg.Broker)
 	if a.risk == nil {
 		a.risk = risk.NewBasic()
 	}
@@ -108,15 +131,17 @@ func (a *App) runBacktest() error {
 	}
 
 	engine, err := backtest.New(backtest.Config{
-		Start:       a.backtestCfg.Start,
-		End:         a.backtestCfg.End,
-		Market:      a.market,
-		Logger:      a.logger,
-		Portfolio:   a.portfolio.(*portfolio.Backtest),
-		Executor:    a.executor,
-		Risk:        a.risk,
-		Clock:       a.btClock,
+		Start:        a.backtestCfg.Start,
+		End:          a.backtestCfg.End,
+		Market:       a.market,
+		Logger:       a.logger,
+		Portfolio:    a.portfolio.(*portfolio.Backtest),
+		Executor:     a.executor,
+		Risk:         a.risk,
+		Clock:        a.btClock,
 		IsTradingDay: a.tradingDay,
+		Session:      a.session,
+		Broker:       a.btBroker,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest engine: %w", err)
