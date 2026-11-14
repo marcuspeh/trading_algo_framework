@@ -107,3 +107,68 @@ func TestReal_HasJobsAndJobs(t *testing.T) {
 		t.Fatalf("jobs=%+v", jobs)
 	}
 }
+
+func TestReal_NextPendingSlotCollectsAllJobsInSlot(t *testing.T) {
+	simStart := time.Date(2024, 1, 2, 15, 0, 0, 0, clock.NYSE)
+	c := clock.NewBacktest(simStart)
+	s := scheduler.NewReal(c, nil)
+
+	tod := job.Time(16, 0)
+	if err := s.Register(job.Job{
+		Name: "b_job", Time: tod,
+		Handler: func(_ job.Context, _ time.Time) ([]order.Order, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(job.Job{
+		Name: "a_job", Time: tod,
+		Handler: func(_ job.Context, _ time.Time) ([]order.Order, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	slotTime, jobs, found := s.NextPendingSlot(simStart)
+	if !found {
+		t.Fatal("expected slot found")
+	}
+	expectedSlot := time.Date(2024, 1, 2, 16, 0, 0, 0, clock.NYSE)
+	if !slotTime.Equal(expectedSlot) {
+		t.Fatalf("expected slot %v, got %v", expectedSlot, slotTime)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+	if jobs[0].Name != "a_job" || jobs[1].Name != "b_job" {
+		t.Fatalf("expected sorted [a_job, b_job], got [%s, %s]", jobs[0].Name, jobs[1].Name)
+	}
+}
+
+func TestReal_SkipsNonTradingDays(t *testing.T) {
+	// Friday 2024-01-05 16:30 (after market close)
+	fridayEvening := time.Date(2024, 1, 5, 16, 30, 0, 0, clock.NYSE)
+	c := clock.NewBacktest(fridayEvening)
+	s := scheduler.NewReal(c, nil)
+	s.SetTradingDay(func(d time.Time) bool {
+		return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
+	})
+
+	if err := s.Register(job.Job{
+		Name: "close_job", Time: job.Time(16, 0),
+		Handler: func(_ job.Context, _ time.Time) ([]order.Order, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	slotTime, jobs, found := s.NextPendingSlot(fridayEvening)
+	if !found {
+		t.Fatal("expected slot found")
+	}
+	// Next slot should be Monday 2024-01-08 16:00, skipping Saturday and Sunday
+	expectedSlot := time.Date(2024, 1, 8, 16, 0, 0, 0, clock.NYSE)
+	if !slotTime.Equal(expectedSlot) {
+		t.Fatalf("expected slot %v, got %v", expectedSlot, slotTime)
+	}
+	if len(jobs) != 1 || jobs[0].Name != "close_job" {
+		t.Fatalf("expected close_job, got %+v", jobs)
+	}
+}

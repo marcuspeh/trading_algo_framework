@@ -32,7 +32,7 @@ func TestJob_Validate(t *testing.T) {
 		},
 		{
 			name: "bad hour",
-			j:    job.Job{Name: "x", Time: job.TimeOfDay{Hour: 99, Minute: 0}, Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil }},
+			j:    job.Job{Name: "x", Time: job.FixedTime(99, 0), Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil }},
 			ok:   false,
 		},
 	}

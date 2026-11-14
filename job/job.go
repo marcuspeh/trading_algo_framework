@@ -8,40 +8,10 @@ package job
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/marcuspeh/trading-framework/order"
 )
-
-// TimeOfDay is a wall-clock time of day used to schedule Jobs.
-type TimeOfDay struct {
-	Hour   int
-	Minute int
-}
-
-// Time is a convenience constructor.
-func Time(hour, minute int) TimeOfDay {
-	return TimeOfDay{Hour: hour, Minute: minute}
-}
-
-func (t TimeOfDay) String() string {
-	return fmt.Sprintf("%02d:%02d", t.Hour, t.Minute)
-}
-
-func (t TimeOfDay) Equal(o TimeOfDay) bool {
-	return t.Hour == o.Hour && t.Minute == o.Minute
-}
-
-func (t TimeOfDay) Validate() error {
-	if t.Hour < 0 || t.Hour > 23 {
-		return fmt.Errorf("invalid hour: %d", t.Hour)
-	}
-	if t.Minute < 0 || t.Minute > 59 {
-		return fmt.Errorf("invalid minute: %d", t.Minute)
-	}
-	return nil
-}
 
 // Mode identifies which stack the strategy is running against.
 type Mode string
@@ -63,8 +33,10 @@ type JobHandler = Handler
 
 // Job is a registered unit of strategy work.
 type Job struct {
-	Name    string
-	Time    TimeOfDay
+	Name string
+	// Time is when the job fires. Use Time for a fixed wall-clock time,
+	// or AtClose/BeforeClose/AtOpen for a slot tied to the session.
+	Time    Slot
 	Handler Handler
 }
 

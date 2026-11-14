@@ -23,14 +23,15 @@ import (
 
 // Engine drives a backtest run.
 type Engine struct {
-	clock     *clock.BacktestClock
-	portfolio *portfolio.Backtest
-	scheduler *scheduler.Backtest
-	market    market.Client
-	executor  execution.Executor
-	risk      risk.Manager
-	logger    job.Logger
-	handler   scheduler.Handler
+	clock        *clock.BacktestClock
+	portfolio    *portfolio.Backtest
+	scheduler    *scheduler.Backtest
+	market       market.Client
+	executor     execution.Executor
+	risk         risk.Manager
+	logger       job.Logger
+	handler      scheduler.Handler
+	isTradingDay portfolio.TradingDayFunc
 
 	start time.Time
 	end   time.Time
@@ -51,6 +52,10 @@ type Config struct {
 	// otherwise the Context would observe a frozen date. When nil, the
 	// engine creates its own BacktestClock.
 	Clock *clock.BacktestClock
+
+	// IsTradingDay decides which dates are trading days. Jobs do not
+	// fire on a non-trading day. When nil, every day is a trading day.
+	IsTradingDay portfolio.TradingDayFunc
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -80,16 +85,21 @@ func New(cfg Config) (*Engine, error) {
 	if clk == nil {
 		clk = clock.NewBacktest(cfg.Start)
 	}
+	isTradingDay := cfg.IsTradingDay
+	if isTradingDay == nil {
+		isTradingDay = func(time.Time) bool { return true }
+	}
 	e := &Engine{
-		clock:     clk,
-		portfolio: cfg.Portfolio,
-		scheduler: scheduler.NewBacktest(cfg.Logger),
-		market:    cfg.Market,
-		executor:  cfg.Executor,
-		risk:      cfg.Risk,
-		logger:    cfg.Logger,
-		start:     util.GetDay(cfg.Start),
-		end:       util.GetDay(cfg.End),
+		clock:        clk,
+		portfolio:    cfg.Portfolio,
+		scheduler:    scheduler.NewBacktest(cfg.Logger),
+		market:       cfg.Market,
+		executor:     cfg.Executor,
+		risk:         cfg.Risk,
+		logger:       cfg.Logger,
+		start:        util.GetDay(cfg.Start),
+		end:          util.GetDay(cfg.End),
+		isTradingDay: isTradingDay,
 	}
 	e.handler = pipeline.Handler(cfg.Risk, cfg.Executor, cfg.Logger)
 	return e, nil
@@ -108,8 +118,12 @@ func (e *Engine) Portfolio() *portfolio.Backtest { return e.portfolio }
 func (e *Engine) Scheduler() *scheduler.Backtest { return e.scheduler }
 
 // Run executes the backtest. For each day in [Start, End], it advances
-// the clock and tells the scheduler to fire every Job whose TimeOfDay
+// the clock and tells the scheduler to fire every Job whose slot
 // matches the current simulated time.
+//
+// A job's slot is resolved against the day being simulated, so a
+// close-relative slot fires at 13:00 on an early-close day and 16:00
+// on an ordinary one.
 func (e *Engine) Run(parent context.Context, jc job.Context) error {
 	if !e.scheduler.HasJobs() {
 		return fmt.Errorf("backtest: no jobs registered")
@@ -121,14 +135,18 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		}
 		tfcontext.Reset(jc)
 
+		// The exchange is closed on weekends and holidays: no job
+		// fires, no mark-to-market happens, and resting orders are not
+		// re-evaluated, because there is no bar for the day.
+		if !e.isTradingDay(cur) {
+			continue
+		}
+
 		// Give resting orders from previous days a chance to trigger
 		// against today's bar before the day's jobs run.
 		e.advanceRestingOrders(cur)
 
-		slots := uniqueSlots(e.scheduler.Jobs())
-		for _, slot := range slots {
-			at := time.Date(cur.Year(), cur.Month(), cur.Day(),
-				slot.Hour, slot.Minute, 0, 0, cur.Location())
+		for _, at := range e.slotsOn(cur) {
 			e.clock.Set(at)
 			e.markToMarket(cur)
 			if err := e.scheduler.FireAt(parent, jc, e.handler, at); err != nil {
@@ -137,6 +155,31 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		}
 	}
 	return nil
+}
+
+// slotsOn returns the distinct slot times for the given day, in
+// chronological order.
+//
+// Slots are resolved per day, so the same job can fire at different
+// times on an ordinary day and an early-close day.
+func (e *Engine) slotsOn(day time.Time) []time.Time {
+	jobs := e.scheduler.Jobs()
+	seen := map[int64]struct{}{}
+	out := []time.Time{}
+
+	for _, j := range jobs {
+		at := j.Time.Resolve(day)
+		key := at.UnixNano()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, at)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Before(out[j])
+	})
+	return out
 }
 
 // advanceRestingOrders retries unfilled orders against the given day's
@@ -172,23 +215,4 @@ func (e *Engine) markToMarket(date time.Time) {
 		}
 		e.portfolio.MarkPrice(pos.Symbol, bars[len(bars)-1].Close)
 	}
-}
-
-func uniqueSlots(jobs []job.Job) []job.TimeOfDay {
-	seen := map[job.TimeOfDay]struct{}{}
-	out := []job.TimeOfDay{}
-	for _, j := range jobs {
-		if _, ok := seen[j.Time]; ok {
-			continue
-		}
-		seen[j.Time] = struct{}{}
-		out = append(out, j.Time)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Hour != out[j].Hour {
-			return out[i].Hour < out[j].Hour
-		}
-		return out[i].Minute < out[j].Minute
-	})
-	return out
 }

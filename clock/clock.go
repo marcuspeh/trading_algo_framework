@@ -10,7 +10,10 @@
 package clock
 
 import (
+	"fmt"
 	"time"
+
+	"github.com/marcuspeh/trading-framework/calendar"
 
 	// Embed the IANA database so the NYSE location resolves even on
 	// hosts without a system zoneinfo directory (scratch containers,
@@ -19,20 +22,43 @@ import (
 )
 
 // NYSE is the location all framework dates are anchored to.
-var NYSE = mustLoadNYSE()
-
-func mustLoadNYSE() *time.Location {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		// time/tzdata is embedded above, so this is unreachable.
-		panic("clock: America/New_York unavailable: " + err.Error())
-	}
-	return loc
-}
+var NYSE = calendar.NYSE
 
 type Clock interface {
 	Now() time.Time
 	Today() time.Time
+}
+
+// TimeOfDay is a wall-clock time of day, in the exchange's own timezone.
+//
+// It is the value a Job is scheduled against when the schedule is a
+// fixed time rather than an offset from the session.
+type TimeOfDay struct {
+	Hour   int
+	Minute int
+}
+
+// Time is a convenience constructor.
+func Time(hour, minute int) TimeOfDay {
+	return TimeOfDay{Hour: hour, Minute: minute}
+}
+
+func (t TimeOfDay) String() string {
+	return fmt.Sprintf("%02d:%02d", t.Hour, t.Minute)
+}
+
+func (t TimeOfDay) Equal(o TimeOfDay) bool {
+	return t.Hour == o.Hour && t.Minute == o.Minute
+}
+
+func (t TimeOfDay) Validate() error {
+	if t.Hour < 0 || t.Hour > 23 {
+		return fmt.Errorf("invalid hour: %d", t.Hour)
+	}
+	if t.Minute < 0 || t.Minute > 59 {
+		return fmt.Errorf("invalid minute: %d", t.Minute)
+	}
+	return nil
 }
 
 // StartOfDay returns midnight of t's calendar date in t's own location.

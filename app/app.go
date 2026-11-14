@@ -105,14 +105,15 @@ func (a *App) runBacktest() error {
 	}
 
 	engine, err := backtest.New(backtest.Config{
-		Start:     a.backtestCfg.Start,
-		End:       a.backtestCfg.End,
-		Market:    a.market,
-		Logger:    a.logger,
-		Portfolio: a.portfolio.(*portfolio.Backtest),
-		Executor:  a.executor,
-		Risk:      a.risk,
-		Clock:     a.btClock,
+		Start:       a.backtestCfg.Start,
+		End:         a.backtestCfg.End,
+		Market:      a.market,
+		Logger:      a.logger,
+		Portfolio:   a.portfolio.(*portfolio.Backtest),
+		Executor:    a.executor,
+		Risk:        a.risk,
+		Clock:       a.btClock,
+		IsTradingDay: a.tradingDay,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest engine: %w", err)
@@ -175,11 +176,12 @@ func (a *App) runLive() error {
 	}
 
 	engine, err := live.New(live.Config{
-		Broker:    a.liveBroker,
-		Logger:    a.logger,
-		Risk:      a.risk,
-		Portfolio: a.portfolio.(*portfolio.Live),
-		Clock:     a.clock,
+		Broker:       a.liveBroker,
+		Logger:       a.logger,
+		Risk:         a.risk,
+		Portfolio:    a.portfolio.(*portfolio.Live),
+		Clock:        a.clock,
+		IsTradingDay: a.tradingDay,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live engine: %w", err)

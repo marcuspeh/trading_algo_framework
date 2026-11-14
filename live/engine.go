@@ -61,10 +61,17 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Risk == nil {
 		cfg.Risk = risk.NewBasic()
 	}
+	if cfg.IsTradingDay == nil {
+		cfg.IsTradingDay = func(time.Time) bool { return true }
+	}
+
+	sched := scheduler.NewReal(cfg.Clock, cfg.Logger)
+	// Jobs do not fire on a day the exchange is closed.
+	sched.SetTradingDay(cfg.IsTradingDay)
 
 	return &Engine{
 		clock:      cfg.Clock,
-		scheduler:  scheduler.NewReal(cfg.Clock, cfg.Logger),
+		scheduler:  sched,
 		executor:   execution.NewLive(cfg.Broker),
 		portfolio:  cfg.Portfolio,
 		broker:     cfg.Broker,
