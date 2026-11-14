@@ -34,7 +34,15 @@ type Real struct {
 	// search starts after it, so a clock sitting exactly on a slot
 	// boundary cannot fire the same slot twice.
 	lastFired time.Time
+
+	// beforeJob runs before each job's handler. It is how the live
+	// engine refreshes the portfolio from the broker before a job
+	// reads it.
+	beforeJob BeforeJob
 }
+
+// BeforeJob is called before a job's handler runs.
+type BeforeJob func(ctx context.Context, jc JobContext, j job.Job, date time.Time) error
 
 func NewReal(c clock.Clock, log Logger) *Real {
 	if c == nil {
@@ -74,6 +82,17 @@ func (s *Real) SetTradingDay(fn func(time.Time) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tradingDay = fn
+}
+
+// SetBeforeJob sets the hook that runs before each job's handler.
+//
+// It is how the live engine refreshes the portfolio from the broker
+// before a job reads it. An error is logged and the job still runs:
+// a stale portfolio is better than no job at all.
+func (s *Real) SetBeforeJob(fn BeforeJob) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeJob = fn
 }
 
 func (s *Real) Jobs() []job.Job {
@@ -154,6 +173,16 @@ func (s *Real) Run(ctx context.Context, jc JobContext, h Handler) error {
 // user-supplied Handler for risk validation and execution.
 func (s *Real) fire(ctx context.Context, jc JobContext, h Handler, j job.Job, at time.Time) error {
 	date := at
+
+	s.mu.Lock()
+	before := s.beforeJob
+	s.mu.Unlock()
+	if before != nil {
+		if err := before(ctx, jc, j, date); err != nil {
+			s.log.Error("before-job hook failed", "name", j.Name, "err", err.Error())
+		}
+	}
+
 	s.log.Info("job start", "name", j.Name, "at", at.Format(time.RFC3339))
 	orders, err := j.Handler(jc, date)
 	if err != nil {

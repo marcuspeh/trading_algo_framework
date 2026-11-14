@@ -62,7 +62,7 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Session = clock.NewSession(cfg.Clock, nil, cfg.IsTradingDay)
 	}
 	if cfg.Logger == nil {
-		return nil, fmt.Errorf("live: Logger is required")
+		cfg.Logger = nopLogger{}
 	}
 	if cfg.Risk == nil {
 		cfg.Risk = risk.NewBasic()
@@ -91,7 +91,8 @@ func New(cfg Config) (*Engine, error) {
 		session:    cfg.Session,
 		risk:       cfg.Risk,
 		logger:     cfg.Logger,
-		reconciler: execution.NewReconciler(cfg.Broker, cfg.Portfolio, cfg.Logger),
+		reconciler: execution.NewReconciler(cfg.Broker, cfg.Portfolio, cfg.Logger).
+			WithPrices(cfg.Market, cfg.Session),
 	}, nil
 }
 
@@ -105,15 +106,55 @@ func (e *Engine) Reconcile(ctx context.Context) (execution.Result, error) {
 	return e.reconciler.Reconcile(ctx)
 }
 
-// Run performs startup reconciliation then enters the scheduler's
-// real-time loop. Blocks until ctx is cancelled.
+// Run checks the broker is connected, performs the startup
+// reconciliation, then enters the scheduler's real-time loop. Blocks
+// until ctx is cancelled.
 func (e *Engine) Run(parent context.Context, jc job.Context) error {
+	if err := e.checkHealth(parent); err != nil {
+		return err
+	}
 	if _, err := e.reconciler.Reconcile(parent); err != nil {
 		return fmt.Errorf("live: reconcile: %w", err)
 	}
 	if !e.scheduler.HasJobs() {
 		return fmt.Errorf("live: no jobs registered")
 	}
+
+	// The portfolio is refreshed from the broker before every job, so
+	// a job that asks what it holds sees what the broker says it
+	// holds - not what it held when the process started.
+	e.scheduler.SetBeforeJob(func(ctx context.Context, _ scheduler.JobContext, _ job.Job, _ time.Time) error {
+		_, err := e.reconciler.Reconcile(ctx)
+		return err
+	})
+
 	handler := pipeline.Handler(e.risk, e.executor, e.logger)
 	return e.scheduler.Run(parent, jc, handler)
 }
+
+// checkHealth fails fast when the broker is not connected.
+//
+// The broker's health endpoint answers even when the exchange behind
+// it is down, so the connection flag is what matters: without it every
+// order would be rejected one at a time, long after the cause.
+func (e *Engine) checkHealth(ctx context.Context) error {
+	res, err := e.broker.Health(ctx)
+	if err != nil {
+		return fmt.Errorf("live: broker health check failed: %w", err)
+	}
+	if res == nil {
+		return fmt.Errorf("live: broker health check returned nothing")
+	}
+	if !res.IBKRConnected {
+		return fmt.Errorf("live: broker is not connected (status %q)", res.Status)
+	}
+	e.logger.Info("broker connected", "status", res.Status, "client_id", res.ClientID)
+	return nil
+}
+
+// nopLogger discards the engine's log lines.
+type nopLogger struct{}
+
+func (nopLogger) Info(string, ...any)  {}
+func (nopLogger) Warn(string, ...any)  {}
+func (nopLogger) Error(string, ...any) {}

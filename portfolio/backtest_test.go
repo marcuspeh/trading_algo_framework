@@ -125,10 +125,14 @@ func TestBacktest_PositionsSortedAndFiltered(t *testing.T) {
 
 func TestLive_SyncOverrides(t *testing.T) {
 	p := portfolio.NewLive()
-	p.Sync([]order.Position{
-		{Symbol: "AAPL", Quantity: 10, AvgPrice: 100},
-		{Symbol: "MSFT", Quantity: -3, AvgPrice: 250},
-	}, 5000, true)
+	p.Sync(portfolio.LiveSnapshot{
+		Positions: []order.Position{
+			{Symbol: "AAPL", Quantity: 10, AvgPrice: 100},
+			{Symbol: "MSFT", Quantity: -3, AvgPrice: 250},
+		},
+		NAV:    5000,
+		HasNAV: true,
+	})
 	if got := p.Position("AAPL").Quantity; got != 10 {
 		t.Fatalf("AAPL=%f", got)
 	}
@@ -142,8 +146,31 @@ func TestLive_SyncOverrides(t *testing.T) {
 
 func TestLive_ValueFallsBackWhenNoNav(t *testing.T) {
 	p := portfolio.NewLive()
-	p.Sync([]order.Position{{Symbol: "AAPL", Quantity: 10, AvgPrice: 100}}, 0, false)
+	p.Sync(portfolio.LiveSnapshot{
+		Positions: []order.Position{{Symbol: "AAPL", Quantity: 10, AvgPrice: 100}},
+		Cash:      0,
+		HasCash:   true,
+	})
 	if got := p.Value(); got != 1000 {
 		t.Fatalf("value=%f", got)
+	}
+}
+
+// A cash balance that could not be derived is unknown, not zero. The
+// fallback to the cost basis is only meaningful when the cash is
+// known.
+func TestLive_UnknownCashIsNotZero(t *testing.T) {
+	p := portfolio.NewLive()
+	p.Sync(portfolio.LiveSnapshot{
+		Positions: []order.Position{{Symbol: "AAPL", Quantity: 10, AvgPrice: 100}},
+	})
+	if p.CashKnown() {
+		t.Error("expected the cash to be unknown")
+	}
+	if got := p.Cash(); got != 0 {
+		t.Errorf("cash=%f want 0", got)
+	}
+	if got := p.Value(); got != 0 {
+		t.Errorf("value=%f want 0 without a NAV or a known cash", got)
 	}
 }
