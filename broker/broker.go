@@ -19,6 +19,18 @@ import (
 	ibkrproxy "github.com/marcuspeh/ibkr-proxy/sdk/go"
 )
 
+// FillReporter is implemented by a broker that fills an order at once
+// and can say at what price.
+//
+// A live broker fills asynchronously and reports fills through its own
+// channels, so it does not implement this. The mock broker fills
+// immediately, and the executor uses this to report the fill price in
+// a backtest.
+type FillReporter interface {
+	// FillPrice returns the price an order filled at.
+	FillPrice(orderID int) (float64, bool)
+}
+
 // SessionAdvancer is implemented by a broker that simulates fills as
 // trading sessions close.
 //

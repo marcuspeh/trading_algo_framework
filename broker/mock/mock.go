@@ -70,6 +70,9 @@ type Mock struct {
 	// finalStatus records how an order that is no longer resting
 	// ended, so a repeated idempotency key reports it accurately.
 	finalStatus map[int]string
+
+	// fillPrices records the price each order filled at.
+	fillPrices map[int]float64
 }
 
 // Compile-time proof that the mock satisfies the broker interface.
@@ -158,6 +161,7 @@ func New(cfg Config) *Mock {
 		orders:            map[int]*restingOrder{},
 		byKey:             map[string]int{},
 		finalStatus:       map[int]string{},
+		fillPrices:        map[int]float64{},
 	}
 }
 
@@ -196,6 +200,7 @@ func (m *Mock) PlaceMarketOrder(ctx context.Context, req broker.MarketOrderReque
 	m.portfolio.ApplyFill(req.Contract.Symbol, side, qty, fillPrice)
 	m.portfolio.MarkPrice(req.Contract.Symbol, price)
 	m.chargeFee(qty)
+	m.fillPrices[id] = fillPrice
 
 	return &broker.OrderResponse{OrderId: id, Status: "Filled"}, nil
 }
@@ -415,6 +420,15 @@ func (m *Mock) applyFill(o *restingOrder, bar order.Bar) {
 	m.portfolio.ApplyFill(o.order.Symbol, o.side, qty, price)
 	m.portfolio.MarkPrice(o.order.Symbol, bar.Close)
 	m.chargeFee(qty)
+	m.fillPrices[o.id] = price
+}
+
+// FillPrice returns the price an order filled at.
+func (m *Mock) FillPrice(orderID int) (float64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	price, ok := m.fillPrices[orderID]
+	return price, ok
 }
 
 // cancelGroup cancels the other orders in a bracket's group, leaving

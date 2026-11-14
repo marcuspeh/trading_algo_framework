@@ -78,7 +78,7 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
-		return order.Result{ID: strconv.Itoa(res.ParentOrderId)}, nil
+		return e.result(res.ParentOrderId), nil
 
 	case o.Type == order.Market:
 		res, err := e.client.PlaceMarketOrder(ctx, broker.MarketOrderRequest{OrderRequest: base}, key)
@@ -88,7 +88,7 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
-		return order.Result{ID: strconv.Itoa(res.OrderId)}, nil
+		return e.result(res.OrderId), nil
 
 	case o.Type == order.Limit:
 		if o.Limit == nil || *o.Limit <= 0 {
@@ -105,11 +105,28 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
-		return order.Result{ID: strconv.Itoa(res.OrderId)}, nil
+		return e.result(res.OrderId), nil
 
 	default:
 		return order.Result{}, fmt.Errorf("executor: unsupported order type")
 	}
+}
+
+// result builds the result of a submission.
+//
+// A broker that fills at once can say at what price, which is what a
+// backtest reports. A live broker fills asynchronously and reports
+// fills through its own channels, so the result carries only the
+// broker's order id.
+func (e *Broker) result(orderID int) order.Result {
+	res := order.Result{ID: strconv.Itoa(orderID)}
+	if reporter, ok := e.client.(broker.FillReporter); ok {
+		if price, ok := reporter.FillPrice(orderID); ok {
+			res.Filled = true
+			res.FillPrice = price
+		}
+	}
+	return res
 }
 
 // Positions returns the broker's positions.
