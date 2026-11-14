@@ -67,6 +67,10 @@ type Mock struct {
 	// repeated submission returns the first response - the same thing
 	// a real broker does.
 	byKey map[string]int
+
+	// finalStatus records how an order that is no longer resting
+	// ended, so a repeated idempotency key reports it accurately.
+	finalStatus map[int]string
 }
 
 // Compile-time proof that the mock satisfies the broker interface.
@@ -128,6 +132,7 @@ func New(cfg Config) *Mock {
 		nextID:            1000,
 		orders:            map[int]*restingOrder{},
 		byKey:             map[string]int{},
+		finalStatus:       map[int]string{},
 	}
 }
 
@@ -275,6 +280,7 @@ func (m *Mock) CancelOrder(_ context.Context, orderID int) error {
 		return fmt.Errorf("mock broker: no open order with id %d", orderID)
 	}
 	delete(m.orders, orderID)
+	m.finalStatus[orderID] = "Cancelled"
 	return nil
 }
 
@@ -350,6 +356,7 @@ func (m *Mock) AdvanceSession(session time.Time) {
 		if o.fillAgainst(bar) {
 			m.applyFill(o, bar)
 			delete(m.orders, id)
+			m.finalStatus[id] = "Filled"
 			// A bracket's legs are one-cancels-the-other: when one
 			// fills, the other is cancelled.
 			m.cancelGroup(o.group, id)
@@ -363,6 +370,7 @@ func (m *Mock) AdvanceSession(session time.Time) {
 		// before the session it is first evaluated against.
 		if o.order.TimeInForce() == "DAY" && !session.After(o.evaluableFrom) {
 			delete(m.orders, id)
+			m.finalStatus[id] = "Cancelled"
 		}
 	}
 }
@@ -438,10 +446,17 @@ func (m *Mock) armProtectiveLegs(parent *restingOrder, session time.Time) {
 	arm(parent.stopLoss)
 }
 
-// statusOf reports the status of a resting order.
+// statusOf reports the status of an order.
+//
+// An order that is no longer resting has either filled, expired or
+// been cancelled, and the difference matters to a caller repeating an
+// idempotent submission.
 func (m *Mock) statusOf(id int) string {
 	if _, ok := m.orders[id]; ok {
 		return "Submitted"
+	}
+	if status, ok := m.finalStatus[id]; ok {
+		return status
 	}
 	return "Filled"
 }

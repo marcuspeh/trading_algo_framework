@@ -370,3 +370,54 @@ func TestMock_CostsAreApplied(t *testing.T) {
 		t.Errorf("cash=%f want %f", got, want)
 	}
 }
+
+// A repeated idempotency key reports what actually happened to the
+// order: a cancelled order is cancelled, not filled.
+func TestMock_RepeatedKeyReportsTheRealStatus(t *testing.T) {
+	at := time.Date(2024, 1, 3, 16, 0, 0, 0, calendar.NYSE)
+	p := portfolio.NewBacktest(10_000)
+	m := mock.New(mock.Config{
+		Portfolio: p,
+		Bars: bars{
+			"2024-01-04": {Timestamp: day(2024, 1, 4), Open: 100, High: 110, Low: 90, Close: 105},
+		},
+		Session: session(t, at),
+	})
+
+	limit := 95.0
+	res, err := m.PlaceLimitOrder(context.Background(), broker.LimitOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+		LmtPrice: limit,
+		TIF:      "GTC",
+	}, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.CancelOrder(context.Background(), res.OrderId); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := m.PlaceLimitOrder(context.Background(), broker.LimitOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+		LmtPrice: limit,
+		TIF:      "GTC",
+	}, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.OrderId != res.OrderId {
+		t.Errorf("the repeated key produced a new order %d, want %d", again.OrderId, res.OrderId)
+	}
+	if again.Status != "Cancelled" {
+		t.Errorf("status=%q want Cancelled", again.Status)
+	}
+}
