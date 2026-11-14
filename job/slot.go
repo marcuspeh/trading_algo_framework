@@ -27,6 +27,18 @@ const (
 	anchorClose
 )
 
+// Session describes the trading session a date belongs to.
+//
+// The framework's default is the NYSE calendar: a session opens at
+// 09:30 ET and closes at 16:00 ET, or 13:00 ET on an early-close day.
+// A strategy may replace the close - see app.WithMarketCloseFunc.
+type Session interface {
+	// Open returns the open of the session on a date.
+	Open(date time.Time) time.Time
+	// Close returns the close of the session on a date.
+	Close(date time.Time) time.Time
+}
+
 // Slot is when a Job fires.
 //
 // A slot is either a fixed wall-clock time - 07:30 every day, whatever
@@ -121,12 +133,18 @@ func (s Slot) Validate() error {
 // A fixed slot resolves to the same time every day. A relative slot
 // resolves against the session of that date, so it lands on 13:00 on an
 // early-close day and 16:00 on an ordinary one.
-func (s Slot) Resolve(date time.Time) time.Time {
+//
+// The session supplies the boundaries, so a strategy that replaces the
+// close moves its close-relative slots with it.
+func (s Slot) Resolve(date time.Time, sess Session) time.Time {
+	if sess == nil {
+		sess = calendar.NYSESession{}
+	}
 	switch s.anchor {
 	case anchorOpen:
-		return calendar.SessionOpen(date).Add(s.offset)
+		return sess.Open(date).Add(s.offset)
 	case anchorClose:
-		return calendar.SessionClose(date).Add(s.offset)
+		return sess.Close(date).Add(s.offset)
 	}
 	y, m, d := date.Date()
 	return time.Date(y, m, d, s.fixed.Hour, s.fixed.Minute, 0, 0, calendar.NYSE)

@@ -50,6 +50,19 @@ const (
 // TradingDayFunc is the signature of an exchange-calendar predicate.
 type TradingDayFunc func(date time.Time) bool
 
+// NYSESession is the default session: the NYSE calendar's open and
+// close.
+//
+// A session opens at 09:30 ET and closes at 16:00 ET, or 13:00 ET on
+// an early-close day.
+type NYSESession struct{}
+
+// Open returns the open of the session on the given date.
+func (NYSESession) Open(date time.Time) time.Time { return SessionOpen(date) }
+
+// Close returns the close of the session on the given date.
+func (NYSESession) Close(date time.Time) time.Time { return SessionClose(date) }
+
 // SessionOpen returns the open of the session on the given date, in ET.
 //
 // The date is taken as written rather than converted, so a caller that

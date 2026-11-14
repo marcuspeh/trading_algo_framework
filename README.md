@@ -168,6 +168,20 @@ runs to 4:00 p.m.
 The rules are checked against the published NYSE calendars for 2025 through
 2028 in the tests.
 
+`app.WithMarketCloseFunc` replaces the session close for a house view that
+differs from the published one - a venue that closes at a different hour, or
+a data vendor whose early closes are not the exchange's. Every close-relative
+slot moves with it:
+
+```go
+a := app.NewApp(
+    app.WithMarketCloseFunc(func(date time.Time) time.Time {
+        return time.Date(date.Year(), date.Month(), date.Day(), 12, 0, 0, 0, calendar.NYSE)
+    }),
+    // ...
+)
+```
+
 Jobs do not fire on a day the exchange is closed, in either mode.
 
 ### Mode-specific implementations
@@ -393,8 +407,9 @@ trading-framework/
   closes, so a job at the close may find that day's bar missing and
   read the previous session's instead.
 - The exchange's early closes are computed by rule and checked against
-  the published calendars for 2025 through 2028. `WithMarketCloseFunc`
-  replaces them if the house view differs.
+  the published calendars for 2025 through 2028.
+  `app.WithMarketCloseFunc` replaces the session close for a house view
+  that differs, and every close-relative slot moves with it.
 - Intraday (minute and hour) bars are not supported. A job may run
   during the session, but it reads daily bars.
 

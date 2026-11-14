@@ -104,6 +104,10 @@ func New(cfg Config) (*Engine, error) {
 	if isTradingDay == nil {
 		isTradingDay = func(time.Time) bool { return true }
 	}
+	session := cfg.Session
+	if session == nil {
+		session = clock.NewSession(clk, nil, isTradingDay)
+	}
 	e := &Engine{
 		clock:        clk,
 		portfolio:    cfg.Portfolio,
@@ -115,9 +119,12 @@ func New(cfg Config) (*Engine, error) {
 		start:        util.GetDay(cfg.Start),
 		end:          util.GetDay(cfg.End),
 		isTradingDay: isTradingDay,
-		session:      cfg.Session,
+		session:      session,
 		broker:       cfg.Broker,
 	}
+	// The scheduler resolves close-relative slots against the same
+	// session the engine does.
+	e.scheduler.SetSession(session)
 	e.handler = pipeline.Handler(cfg.Risk, cfg.Executor, cfg.Logger)
 	return e, nil
 }
@@ -196,7 +203,7 @@ func (e *Engine) slotsOn(day time.Time) []time.Time {
 	out := []time.Time{}
 
 	for _, j := range jobs {
-		at := j.Time.Resolve(day)
+		at := j.Time.Resolve(day, e.session)
 		key := at.UnixNano()
 		if _, ok := seen[key]; ok {
 			continue

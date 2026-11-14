@@ -80,6 +80,11 @@ func (s *Session) PreviousTradingDay(date time.Time) time.Time {
 	return candidate
 }
 
+// Open returns the open of the session on the given date.
+func (s *Session) Open(date time.Time) time.Time {
+	return calendar.SessionOpen(date)
+}
+
 // Close returns the close of the session on the given date.
 func (s *Session) Close(date time.Time) time.Time {
 	return s.closeFn(date)

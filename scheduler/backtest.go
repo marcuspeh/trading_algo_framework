@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/job"
 )
 
@@ -19,6 +20,10 @@ type Backtest struct {
 	jobs  []job.Job
 	byKey map[string]job.Job
 	log   Logger
+
+	// session supplies the session boundaries that close-relative
+	// slots resolve against.
+	session job.Session
 }
 
 func NewBacktest(log Logger) *Backtest {
@@ -26,9 +31,24 @@ func NewBacktest(log Logger) *Backtest {
 		log = nopLogger{}
 	}
 	return &Backtest{
-		byKey: map[string]job.Job{},
-		log:   log,
+		byKey:   map[string]job.Job{},
+		log:     log,
+		session: calendar.NYSESession{},
 	}
+}
+
+// SetSession sets the session that close-relative slots resolve
+// against.
+//
+// The default is the NYSE calendar. A strategy that replaces the
+// session close replaces it here too.
+func (s *Backtest) SetSession(sess job.Session) {
+	if sess == nil {
+		sess = calendar.NYSESession{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.session = sess
 }
 
 func (s *Backtest) Register(j job.Job) error {
@@ -118,7 +138,7 @@ func (s *Backtest) JobsAt(at time.Time) []job.Job {
 
 	var matched []job.Job
 	for _, j := range jobs {
-		if sameTimeOfDay(j.Time.Resolve(at), at) {
+		if sameTimeOfDay(j.Time.Resolve(at, s.session), at) {
 			matched = append(matched, j)
 		}
 	}

@@ -70,7 +70,7 @@ func (a *App) resolveBacktest() error {
 	// One session, shared by the context, the engine and the mock
 	// broker, so they cannot disagree about which session a timestamp
 	// belongs to.
-	a.session = clock.NewSession(a.btClock, nil, a.tradingDay)
+	a.session = clock.NewSession(a.btClock, a.marketClose, a.tradingDay)
 
 	mockBroker := mock.New(mock.Config{
 		Portfolio:         a.portfolio.(*portfolio.Backtest),
@@ -104,7 +104,7 @@ func (a *App) resolveLive() error {
 	}
 
 	a.clock = clock.NewReal()
-	a.session = clock.NewSession(a.clock, nil, a.tradingDay)
+	a.session = clock.NewSession(a.clock, a.marketClose, a.tradingDay)
 	a.portfolio = portfolio.NewLive()
 	a.executor = execution.NewBroker(cfg.Broker)
 	if a.risk == nil {
@@ -192,7 +192,7 @@ func (a *App) positionClockForWarmup() {
 
 	earliest := time.Time{}
 	for _, j := range a.jobs {
-		at := j.Time.Resolve(day)
+		at := j.Time.Resolve(day, a.session)
 		if earliest.IsZero() || at.Before(earliest) {
 			earliest = at
 		}

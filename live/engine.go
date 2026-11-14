@@ -78,6 +78,9 @@ func New(cfg Config) (*Engine, error) {
 	sched := scheduler.NewReal(cfg.Clock, cfg.Logger)
 	// Jobs do not fire on a day the exchange is closed.
 	sched.SetTradingDay(cfg.IsTradingDay)
+	// Close-relative slots resolve against the same session the
+	// reconciler and the context use.
+	sched.SetSession(cfg.Session)
 
 	return &Engine{
 		clock:      cfg.Clock,

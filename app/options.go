@@ -46,6 +46,7 @@ type App struct {
 	config     job.Config
 	logger     job.Logger
 	tradingDay portfolio.TradingDayFunc
+	marketClose func(time.Time) time.Time
 
 	// Convenience configs. If set, Run() wires the matching stack.
 	backtestCfg *BacktestConfig
@@ -77,6 +78,23 @@ type warmupEntry struct {
 type Option func(*App)
 
 func WithRiskManager(r RiskManager) Option                 { return func(a *App) { a.risk = r } }
+
+// WithMarketCloseFunc replaces the exchange calendar's session close.
+//
+// It takes the close of the session on a date and returns the time of
+// it. The default is the NYSE calendar: 16:00 ET, or 13:00 ET on an
+// early-close day.
+//
+// The escape hatch is for a house view of the schedule that differs
+// from the published one - an exchange that closes at a different
+// hour, or a data vendor whose early closes are not the exchange's.
+// The function is called for every date the framework resolves a
+// session for, so it should be cheap and must be pure.
+//
+// Passing nil restores the default.
+func WithMarketCloseFunc(fn func(date time.Time) time.Time) Option {
+	return func(a *App) { a.marketClose = fn }
+}
 func WithMarketClient(m MarketClient) Option               { return func(a *App) { a.market = m } }
 func WithUniverseClient(u universe.Client) Option          { return func(a *App) { a.universe = u } }
 func WithConfigClient(c job.Config) Option                 { return func(a *App) { a.config = c } }

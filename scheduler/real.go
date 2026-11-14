@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
 )
@@ -39,6 +40,10 @@ type Real struct {
 	// engine refreshes the portfolio from the broker before a job
 	// reads it.
 	beforeJob BeforeJob
+
+	// session supplies the session boundaries that close-relative
+	// slots resolve against.
+	session job.Session
 }
 
 // BeforeJob is called before a job's handler runs.
@@ -56,7 +61,22 @@ func NewReal(c clock.Clock, log Logger) *Real {
 		clock:      c,
 		log:        log,
 		tradingDay: func(time.Time) bool { return true },
+		session:    calendar.NYSESession{},
 	}
+}
+
+// SetSession sets the session that close-relative slots resolve
+// against.
+//
+// The default is the NYSE calendar. A strategy that replaces the
+// session close replaces it here too.
+func (s *Real) SetSession(sess job.Session) {
+	if sess == nil {
+		sess = calendar.NYSESession{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.session = sess
 }
 
 func (s *Real) Register(j job.Job) error {
@@ -252,7 +272,7 @@ func (s *Real) slotOn(jobs []job.Job, day, searchFrom time.Time) (time.Time, []j
 
 	var candidates []candidate
 	for _, j := range jobs {
-		at := j.Time.Resolve(day)
+		at := j.Time.Resolve(day, s.session)
 		if at.Before(searchFrom) {
 			continue
 		}
