@@ -25,7 +25,6 @@ func (fakeUniverse) Constituents(_ context.Context, _ string, _ time.Time) ([]st
 type fakeConfig struct{}
 
 func (fakeConfig) Get(string) (string, error)                  { return "", nil }
-func (fakeConfig) Watch(string, any, any) (job.Watcher, error) { return nil, nil }
 
 type fakeBars struct{}
 

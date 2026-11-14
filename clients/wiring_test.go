@@ -52,4 +52,3 @@ func TestLiveWiringCompiles(t *testing.T) {
 type stubConfig struct{}
 
 func (stubConfig) Get(string) (string, error)                  { return "", job.ErrNotFound }
-func (stubConfig) Watch(string, any, any) (job.Watcher, error) { return nil, nil }

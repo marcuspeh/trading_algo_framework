@@ -40,7 +40,6 @@ func (fakePortfolio) Value() float64                 { return 1000 }
 type fakeConfig struct{}
 
 func (fakeConfig) Get(string) (string, error)                  { return "", nil }
-func (fakeConfig) Watch(string, any, any) (job.Watcher, error) { return nil, nil }
 
 func newCtx(t *testing.T, mkt *fakeMarket, uni *fakeUniverse, today time.Time) (interface {
 	Today() time.Time

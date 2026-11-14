@@ -166,7 +166,7 @@ func (a *App) runBacktest() error {
 	return engine.Run(context.Background(), ctx)
 }
 
-// positionClockForWarmup moves the backtest clock to the first slot of
+// positionClockForWarmup moves the backtest clock to the last slot of
 // the first trading day.
 //
 // The bar cache is keyed by the session the bars were fetched for, so
@@ -174,6 +174,11 @@ func (a *App) runBacktest() error {
 // midnight the anchor would still be the previous session - the
 // current one has not closed yet - and the warmed entry would be
 // discarded.
+//
+// The last slot is used rather than the first, because the last slot
+// of a day is the one whose session has closed: a job at the close
+// reads the day's own bar, and that is the series a strategy usually
+// wants warmed.
 func (a *App) positionClockForWarmup() {
 	if a.btClock == nil || len(a.jobs) == 0 {
 		return
@@ -185,15 +190,15 @@ func (a *App) positionClockForWarmup() {
 		day = day.AddDate(0, 0, 1)
 	}
 
-	earliest := time.Time{}
+	latest := time.Time{}
 	for _, j := range a.jobs {
 		at := j.Time.Resolve(day)
-		if earliest.IsZero() || at.Before(earliest) {
-			earliest = at
+		if latest.IsZero() || at.After(latest) {
+			latest = at
 		}
 	}
-	if !earliest.IsZero() {
-		a.btClock.Set(earliest)
+	if !latest.IsZero() {
+		a.btClock.Set(latest)
 	}
 }
 
@@ -213,7 +218,11 @@ func (a *App) runWarmup(ctx job.Context) error {
 	for _, w := range entries {
 		bars, err := ctx.Bars(w.Symbol, w.Lookback)
 		if err != nil {
-			if errors.Is(err, job.ErrInsufficientBars) {
+			// A symbol with a short history, or none at all, is
+			// worth warning about but not worth abandoning the
+			// backtest over: the strategy will hit the same
+			// shortfall when it asks for the history itself.
+			if errors.Is(err, job.ErrInsufficientBars) || errors.Is(err, job.ErrNotFound) {
 				a.logger.Warn("warmup has a short history",
 					"symbol", w.Symbol,
 					"lookback", w.Lookback,

@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
+	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/order"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/universe"
@@ -24,9 +25,7 @@ type Portfolio = portfolio.Portfolio
 
 // MarketClient is the framework's market-data dependency. The clients/
 // package supplies the real adapter.
-type MarketClient interface {
-	Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error)
-}
+type MarketClient = market.Client
 
 // TradingDayFunc is the signature of an exchange-calendar predicate.
 type TradingDayFunc = portfolio.TradingDayFunc

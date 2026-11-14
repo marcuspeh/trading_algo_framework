@@ -81,12 +81,6 @@ type OrderBroker interface {
 // Config and Logger interfaces are satisfied by user-provided adapters.
 type Config interface {
 	Get(key string) (string, error)
-	Watch(key string, out any, factory any) (Watcher, error)
-}
-
-type Watcher interface {
-	Value(out any) error
-	Stop()
 }
 
 type Logger interface {

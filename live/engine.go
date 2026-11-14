@@ -16,7 +16,6 @@ import (
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
 	"github.com/marcuspeh/trading-framework/scheduler"
-	"github.com/marcuspeh/trading-framework/universe"
 )
 
 // Engine drives a live trading run: reconciles on startup, then enters
@@ -38,8 +37,6 @@ type Config struct {
 	Broker       execution.Client
 	Executor     execution.Executor
 	Market       market.Client
-	Universe     universe.Client
-	Config       job.Config
 	Logger       job.Logger
 	Risk         risk.Manager
 	Clock        clock.Clock
