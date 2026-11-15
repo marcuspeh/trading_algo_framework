@@ -2,12 +2,14 @@ package mock_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/broker/mock"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/order"
 	"github.com/marcuspeh/trading-framework/portfolio"
@@ -34,7 +36,7 @@ func session(t *testing.T, at time.Time) *clock.Session {
 	t.Helper()
 	clk := clock.NewBacktest(at)
 	clk.Set(at)
-	return clock.NewSession(clk, nil, calendar.TradingDay)
+	return clock.NewSession(clk, published.New())
 }
 
 func day(y int, m time.Month, d int) time.Time {
@@ -348,9 +350,9 @@ func TestMock_CostsAreApplied(t *testing.T) {
 		Bars: bars{
 			"2024-01-03": {Timestamp: day(2024, 1, 3), Close: 100},
 		},
-		Session:           session(t, at),
-		SlippageBps:       10, // 0.1%
-		Commission:        1,
+		Session:            session(t, at),
+		SlippageBps:        10, // 0.1%
+		Commission:         1,
 		CommissionPerShare: 0.01,
 	})
 
@@ -514,5 +516,33 @@ func TestMock_TakeProfitFiresOnARise(t *testing.T) {
 	// not at the session's open of 110.
 	if got, want := p.Cash(), float64(10_000-10*100+10*120); got != want {
 		t.Errorf("cash=%f want %f", got, want)
+	}
+}
+
+// The mock needs a session, and a session needs the exchange calendar
+// for its boundaries. With neither, the mock panics rather than guess
+// when a session ended.
+func TestMock_NewRequiresASessionOrACalendar(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected a panic when neither a session nor a calendar is supplied")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value = %v want a string", r)
+		}
+		if !strings.Contains(msg, "session or a calendar") {
+			t.Errorf("panic message = %q want it to name what is missing", msg)
+		}
+	}()
+	mock.New(mock.Config{})
+}
+
+// A calendar alone is enough: the session's boundaries come from it.
+func TestMock_NewAcceptsACalendar(t *testing.T) {
+	m := mock.New(mock.Config{Calendar: published.New()})
+	if m == nil {
+		t.Fatal("expected a mock")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
@@ -27,6 +28,7 @@ type stubContext struct{ job.Context }
 func TestReal_CloseRelativeSlotMovesWithTheSession(t *testing.T) {
 	c := clock.NewBacktest(time.Date(2026, 11, 27, 0, 0, 0, 0, calendar.NYSE))
 	s := scheduler.NewReal(c, nil)
+	s.SetSession(clock.NewSession(c, published.New()))
 	if err := s.Register(job.Job{
 		Name: "close", Time: job.AtClose(),
 		Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil },
@@ -49,6 +51,7 @@ func TestReal_CloseRelativeSlotMovesWithTheSession(t *testing.T) {
 	// An ordinary day closes at 16:00.
 	c2 := clock.NewBacktest(time.Date(2026, 12, 1, 0, 0, 0, 0, calendar.NYSE))
 	s2 := scheduler.NewReal(c2, nil)
+	s2.SetSession(clock.NewSession(c2, published.New()))
 	if err := s2.Register(job.Job{
 		Name: "close", Time: job.AtClose(),
 		Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil },
@@ -69,6 +72,7 @@ func TestReal_CloseRelativeSlotMovesWithTheSession(t *testing.T) {
 func TestReal_BeforeCloseMovesWithTheSession(t *testing.T) {
 	c := clock.NewBacktest(time.Date(2026, 11, 27, 0, 0, 0, 0, calendar.NYSE))
 	s := scheduler.NewReal(c, nil)
+	s.SetSession(clock.NewSession(c, published.New()))
 	if err := s.Register(job.Job{
 		Name: "preload", Time: job.BeforeClose(time.Hour),
 		Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil },
@@ -89,6 +93,7 @@ func TestReal_BeforeCloseMovesWithTheSession(t *testing.T) {
 func TestReal_PreOpenSlotIsUnaffectedByEarlyClose(t *testing.T) {
 	c := clock.NewBacktest(time.Date(2026, 11, 27, 0, 0, 0, 0, calendar.NYSE))
 	s := scheduler.NewReal(c, nil)
+	s.SetSession(clock.NewSession(c, published.New()))
 	if err := s.Register(job.Job{
 		Name: "cancel-stale", Time: job.Time(7, 30),
 		Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil },

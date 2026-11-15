@@ -10,6 +10,7 @@ import (
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -31,7 +32,7 @@ func TestLiveWiringCompiles(t *testing.T) {
 		BaseURL: "http://localhost",
 		Port:    5001,
 	})
-	marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
+	marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"), published.New())
 	universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
 
 	a := app.NewApp(
@@ -51,4 +52,4 @@ func TestLiveWiringCompiles(t *testing.T) {
 
 type stubConfig struct{}
 
-func (stubConfig) Get(string) (string, error)                  { return "", job.ErrNotFound }
+func (stubConfig) Get(string) (string, error) { return "", job.ErrNotFound }

@@ -64,7 +64,8 @@ type barCacheEntry struct {
 }
 
 // New constructs a Context. All dependencies are required except
-// IsTradingDay (defaults to NYSEWeekdays) and Mode (defaults to
+// IsTradingDay (defaults to the exchange calendar's trading days) and
+// Mode (defaults to
 // ModeBacktest).
 func New(opts Options) (job.Context, error) {
 	err := opts.Validate()

@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/marcuspeh/go-tools/util"
-	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/broker"
+	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/market"
@@ -67,6 +68,10 @@ type Config struct {
 	// the same Session the Context was built with.
 	Session *clock.Session
 
+	// Calendar is the exchange calendar. It is required when no
+	// Session is supplied: the session's boundaries come from it.
+	Calendar calendar.Provider
+
 	// Broker is the simulated broker. When it implements
 	// broker.SessionAdvancer, the engine tells it when a session has
 	// closed so it can evaluate the orders resting at it.
@@ -100,13 +105,19 @@ func New(cfg Config) (*Engine, error) {
 	if clk == nil {
 		clk = clock.NewBacktest(cfg.Start)
 	}
-	isTradingDay := cfg.IsTradingDay
-	if isTradingDay == nil {
-		isTradingDay = func(time.Time) bool { return true }
-	}
 	session := cfg.Session
 	if session == nil {
-		session = clock.NewSession(clk, nil, isTradingDay)
+		if cfg.Calendar == nil {
+			return nil, fmt.Errorf("backtest: Calendar is required")
+		}
+		session = clock.NewSession(clk, cfg.Calendar)
+	}
+	// A calendar knows which days the exchange traded. When the caller
+	// supplied one, the engine honours it: jobs do not fire on a
+	// weekend or a holiday.
+	isTradingDay := cfg.IsTradingDay
+	if isTradingDay == nil {
+		isTradingDay = session.IsTradingDay
 	}
 	e := &Engine{
 		clock:        clk,

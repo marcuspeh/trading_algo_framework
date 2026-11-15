@@ -23,6 +23,7 @@ import (
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/config"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -170,13 +171,21 @@ func main() {
 	})
 
 	a := app.NewApp(
+		// The exchange calendar. A live strategy asks the
+		// market-data-service for it:
+		//
+		//   calendar.NewService(marketdata.NewClient("http://localhost:8001"))
+		//
+		// This example runs on in-memory data, so it uses the
+		// published NYSE calendars instead of a running service.
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
 			StartingCash: 10_000,
 
-			SlippageBps:  5,
-			Commission:   1,
+			SlippageBps: 5,
+			Commission:  1,
 		}),
 		app.WithMarketClient(market),
 		app.WithUniverseClient(constituents),

@@ -7,6 +7,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -35,6 +36,7 @@ func (m *recordingMkt) Bars(_ context.Context, _ string, lookback int, asOf time
 func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 	m := &recordingMkt{}
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, calendar.NYSE),
 			End:          time.Date(2024, 1, 3, 0, 0, 0, 0, calendar.NYSE),
@@ -83,6 +85,7 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
 	m := &recordingMkt{}
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 3, 0, 0, 0, 0, calendar.NYSE),
 			End:          time.Date(2024, 1, 4, 0, 0, 0, 0, calendar.NYSE),

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clients"
 )
 
@@ -24,7 +25,7 @@ func TestMarket_UnpublishedSessionIsAskedForAgain(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 
 	// A session the service holds no bar for.
 	future := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)

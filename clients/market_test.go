@@ -10,6 +10,7 @@ import (
 	"time"
 
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clients"
 )
 
@@ -86,7 +87,7 @@ func TestMarket_WindowCoversTheRequestedSessions(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 	asOf := dates[9]
 	bars, err := m.Bars(context.Background(), "AAPL", 3, asOf)
 	if err != nil {
@@ -114,7 +115,7 @@ func TestMarket_CachesBetweenCalls(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 
 	// The first call fetches the window.
 	if _, err := m.Bars(context.Background(), "AAPL", 5, dates[9]); err != nil {
@@ -147,7 +148,7 @@ func TestMarket_SuppliesBarPrices(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 
 	bar, ok := m.Bar("AAPL", dates[2])
 	if !ok {

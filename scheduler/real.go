@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
 )
@@ -28,7 +27,8 @@ type Real struct {
 	clock clock.Clock
 
 	// tradingDay reports whether the exchange is open on a date. The
-	// default accepts every day; the app installs the NYSE calendar.
+	// default accepts every day; the app installs the exchange
+	// calendar.
 	tradingDay func(time.Time) bool
 
 	// lastFired is the slot time most recently fired. The next-slot
@@ -61,19 +61,20 @@ func NewReal(c clock.Clock, log Logger) *Real {
 		clock:      c,
 		log:        log,
 		tradingDay: func(time.Time) bool { return true },
-		session:    calendar.NYSESession{},
 	}
 }
 
 // SetSession sets the session that close-relative slots resolve
 // against.
 //
-// The default is the NYSE calendar. A strategy that replaces the
-// session close replaces it here too.
+// The session comes from the exchange calendar the App was built with.
+// A strategy that replaces the session close replaces it here too.
+//
+// A scheduler with no session resolves a fixed-time slot, but a
+// close-relative one has no boundaries to resolve against and panics.
+// The framework has no default session: the exchange calendar is the
+// only source.
 func (s *Real) SetSession(sess job.Session) {
-	if sess == nil {
-		sess = calendar.NYSESession{}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.session = sess

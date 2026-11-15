@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/backtest"
 	"github.com/marcuspeh/trading-framework/broker/mock"
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/execution"
@@ -23,12 +24,44 @@ import (
 func (a *App) resolve() error {
 	switch {
 	case a.backtestCfg != nil:
-		return a.resolveBacktest()
 	case a.liveCfg != nil:
-		return a.resolveLive()
 	default:
 		return fmt.Errorf("app: no mode configured (use WithBacktest or WithLive)")
 	}
+
+	if err := a.applyCalendar(); err != nil {
+		return err
+	}
+
+	if a.backtestCfg != nil {
+		return a.resolveBacktest()
+	}
+	return a.resolveLive()
+}
+
+// applyCalendar settles which exchange calendar the framework trades on.
+//
+// The calendar provider is the exchange's schedule. A strategy's
+// WithTradingDayFunc and WithMarketCloseFunc win over it: they replace
+// the provider's answers rather than adding to them.
+func (a *App) applyCalendar() error {
+	if a.calendar == nil {
+		return errors.New("app: a calendar provider is required (WithCalendarProvider)")
+	}
+	// A strategy that trades on days the exchange was closed still needs
+	// a session to resolve its slots against. The standard session stands
+	// in for the days the provider has no answer for.
+	if a.tradingDayOverride != nil {
+		a.calendar = calendar.WithSessionFallback(a.calendar)
+	}
+	if a.marketCloseOverride != nil {
+		a.calendar = calendar.WithCloseFunc(a.calendar, a.marketCloseOverride)
+	}
+	if a.tradingDayOverride != nil {
+		a.calendar = calendar.WithTradingDayFunc(a.calendar, a.tradingDayOverride)
+	}
+	a.tradingDay = calendar.NewTradingDayFunc(a.calendar)
+	return nil
 }
 
 func (a *App) resolveBacktest() error {
@@ -70,14 +103,14 @@ func (a *App) resolveBacktest() error {
 	// One session, shared by the context, the engine and the mock
 	// broker, so they cannot disagree about which session a timestamp
 	// belongs to.
-	a.session = clock.NewSession(a.btClock, a.marketClose, a.tradingDay)
+	a.session = clock.NewSession(a.btClock, a.calendar)
 
 	mockBroker := mock.New(mock.Config{
-		Portfolio:         a.portfolio.(*portfolio.Backtest),
-		Bars:              bars,
-		Session:           a.session,
-		SlippageBps:       cfg.SlippageBps,
-		Commission:        cfg.Commission,
+		Portfolio:          a.portfolio.(*portfolio.Backtest),
+		Bars:               bars,
+		Session:            a.session,
+		SlippageBps:        cfg.SlippageBps,
+		Commission:         cfg.Commission,
 		CommissionPerShare: cfg.CommissionPerShare,
 	})
 	a.btBroker = mockBroker
@@ -104,7 +137,7 @@ func (a *App) resolveLive() error {
 	}
 
 	a.clock = clock.NewReal()
-	a.session = clock.NewSession(a.clock, a.marketClose, a.tradingDay)
+	a.session = clock.NewSession(a.clock, a.calendar)
 	a.portfolio = portfolio.NewLive()
 	a.executor = execution.NewBroker(cfg.Broker)
 	if a.risk == nil {
@@ -142,6 +175,7 @@ func (a *App) runBacktest(parent context.Context) error {
 		Clock:        a.btClock,
 		IsTradingDay: a.tradingDay,
 		Session:      a.session,
+		Calendar:     a.calendar,
 		Broker:       a.btBroker,
 	})
 	if err != nil {

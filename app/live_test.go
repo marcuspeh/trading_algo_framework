@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
@@ -99,6 +100,7 @@ func TestApp_LiveCashIsDerived(t *testing.T) {
 	}
 
 	a := NewApp(
+		WithCalendarProvider(published.New()),
 		WithLive(LiveConfig{Broker: b}),
 		WithMarketClient(clients.NewStaticBars(bars)),
 		WithUniverseClient(liveFakeUniverse{}),
@@ -136,7 +138,7 @@ func recentSessions() []time.Time {
 	out := make([]time.Time, 0, 10)
 	day := time.Now().In(calendar.NYSE)
 	for i := 0; len(out) < 10; i++ {
-		if calendar.TradingDay(day) {
+		if published.TradingDay(day) {
 			out = append(out, time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, calendar.NYSE))
 		}
 		day = day.AddDate(0, 0, -1)

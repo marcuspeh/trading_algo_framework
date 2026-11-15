@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/app"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -24,7 +25,7 @@ func (fakeUniverse) Constituents(_ context.Context, _ string, _ time.Time) ([]st
 
 type fakeConfig struct{}
 
-func (fakeConfig) Get(string) (string, error)                  { return "", nil }
+func (fakeConfig) Get(string) (string, error) { return "", nil }
 
 type fakeBars struct{}
 
@@ -33,7 +34,7 @@ func (fakeBars) Bar(string, time.Time) (order.Bar, bool) { return order.Bar{}, f
 func noopJob(_ job.Context, _ time.Time) ([]order.Order, error) { return nil, nil }
 
 func TestNewApp_NoConfigErrors(t *testing.T) {
-	a := app.NewApp()
+	a := app.NewApp(app.WithCalendarProvider(published.New()))
 	a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob})
 	if err := a.Run(); err == nil {
 		t.Fatal("expected error for missing config")
@@ -42,6 +43,7 @@ func TestNewApp_NoConfigErrors(t *testing.T) {
 
 func TestApp_BacktestEndToEnd(t *testing.T) {
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			End:          time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC),
@@ -64,6 +66,7 @@ func TestApp_BacktestEndToEnd(t *testing.T) {
 
 func TestApp_LiveRequiresBroker(t *testing.T) {
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithLive(app.LiveConfig{}),
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
@@ -76,14 +79,14 @@ func TestApp_LiveRequiresBroker(t *testing.T) {
 }
 
 func TestApp_RegisterJobRejectsBadJob(t *testing.T) {
-	a := app.NewApp()
+	a := app.NewApp(app.WithCalendarProvider(published.New()))
 	if err := a.RegisterJob(job.Job{}); err == nil {
 		t.Fatal("expected validation error")
 	}
 }
 
 func TestApp_RegisterJobRejectsDuplicateName(t *testing.T) {
-	a := app.NewApp()
+	a := app.NewApp(app.WithCalendarProvider(published.New()))
 	if err := a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +96,7 @@ func TestApp_RegisterJobRejectsDuplicateName(t *testing.T) {
 }
 
 func TestApp_AddWarmupValidates(t *testing.T) {
-	a := app.NewApp()
+	a := app.NewApp(app.WithCalendarProvider(published.New()))
 	if err := a.AddWarmup("", 10); err == nil {
 		t.Fatal("expected error for empty symbol")
 	}
@@ -112,6 +115,7 @@ func TestApp_BacktestContextReportsBacktestMode(t *testing.T) {
 	}
 
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			End:          time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC),
@@ -138,6 +142,7 @@ func TestApp_BacktestContextReportsBacktestMode(t *testing.T) {
 func TestApp_WarmupFetchesHistory(t *testing.T) {
 	mkt := &countingMarket{}
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			End:          time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC),

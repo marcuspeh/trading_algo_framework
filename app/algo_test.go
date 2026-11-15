@@ -6,6 +6,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
@@ -42,6 +43,7 @@ func TestApp_ExpressesTheReferenceSchedule(t *testing.T) {
 		var out []firing
 
 		a := app.NewApp(
+			app.WithCalendarProvider(published.New()),
 			app.WithBacktest(app.BacktestConfig{
 				Start:        day,
 				End:          day.AddDate(0, 0, 1),
@@ -128,6 +130,7 @@ func TestApp_CustomMarketClose(t *testing.T) {
 
 	var fired []firing
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        day,
 			End:          day.AddDate(0, 0, 1),

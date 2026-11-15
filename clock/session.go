@@ -18,29 +18,36 @@ import (
 // it: the Context, the backtest engine, the mock broker and the live
 // reconciler. Sharing one is what keeps them from disagreeing about
 // which session a timestamp belongs to.
+//
+// The session's boundaries come from a calendar provider, which is the
+// exchange's own schedule. A provider that cannot answer fails the
+// run: the framework will not guess when a session ended.
 type Session struct {
 	clk        Clock
-	closeFn    func(date time.Time) time.Time
-	tradingDay func(date time.Time) bool
+	openFn     func(time.Time) time.Time
+	closeFn    func(time.Time) time.Time
+	tradingDay func(time.Time) bool
 }
 
-// NewSession returns a Session for the given clock.
+// NewSession returns a Session for the given clock and calendar.
 //
-// closeFn returns the close of the session on a date: 13:00 ET on an
-// early-close day, 16:00 otherwise. Passing nil uses the NYSE
-// calendar. tradingDay reports whether the exchange is open on a date;
-// passing nil accepts every day.
-func NewSession(clk Clock, closeFn func(time.Time) time.Time, tradingDay func(time.Time) bool) *Session {
+// The provider is the exchange calendar: it says which days the
+// exchange traded and when each session opened and closed. A nil
+// provider is a programming error - a session without a calendar
+// cannot say when a session ends - so it panics.
+func NewSession(clk Clock, provider calendar.Provider) *Session {
 	if clk == nil {
 		clk = NewReal()
 	}
-	if closeFn == nil {
-		closeFn = calendar.SessionClose
+	if provider == nil {
+		panic("clock: a session needs a calendar provider")
 	}
-	if tradingDay == nil {
-		tradingDay = func(time.Time) bool { return true }
+	return &Session{
+		clk:        clk,
+		openFn:     calendar.NewOpenFunc(provider),
+		closeFn:    calendar.NewCloseFunc(provider),
+		tradingDay: calendar.NewTradingDayFunc(provider),
 	}
-	return &Session{clk: clk, closeFn: closeFn, tradingDay: tradingDay}
 }
 
 // Clock returns the underlying clock.
@@ -82,7 +89,7 @@ func (s *Session) PreviousTradingDay(date time.Time) time.Time {
 
 // Open returns the open of the session on the given date.
 func (s *Session) Open(date time.Time) time.Time {
-	return calendar.SessionOpen(date)
+	return s.openFn(date)
 }
 
 // Close returns the close of the session on the given date.

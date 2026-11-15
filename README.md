@@ -46,6 +46,7 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 
 func main() {
     a := app.NewApp(
+        app.WithCalendarProvider(calendar.NewService(marketdata.NewClient("http://localhost:8001"))),
         app.WithBacktest(app.BacktestConfig{
             Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
             End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
@@ -151,22 +152,24 @@ The close is per date: 16:00 ET normally, 13:00 ET on an early-close day.
 
 ### The calendar
 
-The `calendar` package owns the exchange calendar: holidays, early closes,
-the session open (09:30) and close, and the previous and next trading day.
+The `calendar` package owns the exchange calendar: which days the exchange
+traded, which of them closed early, and when each session opened and closed.
 
-Early closes - a 1:00 p.m. ET close - fall on:
+The framework has no copy of the NYSE rules. The exchange publishes its
+schedule and the
+[market-data-service](https://github.com/marcuspeh/market-data-service)
+serves it, so the calendar is a provider the strategy supplies:
 
-- the Friday after Thanksgiving;
-- Christmas Eve, December 24th, when it is a trading day;
-- July 3rd, when July 4th falls on a Tuesday, Wednesday, Thursday or
-  Friday.
+```go
+a := app.NewApp(
+    app.WithCalendarProvider(calendar.NewService(marketdata.NewClient("http://localhost:8001"))),
+    // ...
+)
+```
 
-New Year's Eve is deliberately not an early close. The 1:00 p.m. close on
-December 31st belongs to the fixed-income calendar; the NYSE equity session
-runs to 4:00 p.m.
-
-The rules are checked against the published NYSE calendars for 2025 through
-2028 in the tests.
+The provider asks the service about a date once and caches the answer. A
+service failure fails the run: the framework will not trade on a schedule it
+could not confirm.
 
 `app.WithMarketCloseFunc` replaces the session close for a house view that
 differs from the published one - a venue that closes at a different hour, or
@@ -181,6 +184,37 @@ a := app.NewApp(
     // ...
 )
 ```
+
+`app.WithTradingDayFunc` replaces the trading days for a strategy that trades on
+a different exchange's days, or on a schedule of its own:
+
+```go
+a := app.NewApp(
+    app.WithTradingDayFunc(func(date time.Time) bool {
+        return date.Weekday() != time.Saturday && date.Weekday() != time.Sunday
+    }),
+    // ...
+)
+```
+
+On the days it names that the exchange was closed, the standard session - 09:30
+to 16:00 ET - stands in, so a close-relative slot still resolves.
+
+For a backtest that needs a calendar without a running market-data-service,
+`calendar/published` serves the published NYSE holiday and early-close
+calendars:
+
+```go
+a := app.NewApp(
+    app.WithCalendarProvider(published.New()),
+    // ...
+)
+```
+
+It covers 2023 through 2029 and refuses the years it has no data for, so a
+test that wanders outside that range fails loudly rather than being answered
+by a guess. A live strategy should use `calendar.NewService` instead, so it
+trades on the exchange's current schedule.
 
 Jobs do not fire on a day the exchange is closed, in either mode.
 
@@ -235,11 +269,13 @@ brokerClient := clients.NewBroker(ctx, clients.BrokerConfig{
     BaseURL: "http://localhost",
     Port:    5001,
 })
-marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
+calendarClient := calendar.NewService(marketdata.NewClient("http://localhost:8001"))
+marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"), calendarClient)
 universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
 
 a := app.NewApp(
     app.WithLive(app.LiveConfig{Broker: brokerClient}),
+    app.WithCalendarProvider(calendarClient),
     app.WithMarketClient(marketClient),
     app.WithUniverseClient(universeClient),
     app.WithConfigClient(myConfigClient),
@@ -372,7 +408,8 @@ trading-framework/
 ├── backtest/    # backtest engine loop
 ├── broker/      # broker.Client interface + wire types
 ├── broker/mock/ # in-memory broker for backtests
-├── calendar/    # NYSE holidays, early closes, session times
+├── calendar/    # exchange calendar: Provider interface + service client
+├── calendar/published/ # published NYSE calendars, for tests and examples
 ├── clients/     # broker client + market-data-service adapters
 ├── clock/       # BacktestClock, RealClock, Session
 ├── config/      # file-backed job.Config
@@ -406,8 +443,8 @@ trading-framework/
 - The market-data service publishes a session's bar after the session
   closes, so a job at the close may find that day's bar missing and
   read the previous session's instead.
-- The exchange's early closes are computed by rule and checked against
-  the published calendars for 2025 through 2028.
+- The exchange calendar comes from the market-data-service, so the
+  framework only knows the schedule the service can answer for.
   `app.WithMarketCloseFunc` replaces the session close for a house view
   that differs, and every close-relative slot moves with it.
 - Intraday (minute and hour) bars are not supported. A job may run

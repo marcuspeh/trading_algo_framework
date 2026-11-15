@@ -40,8 +40,9 @@ type MarketSource interface {
 // re-read the whole window from the service; with one, each day costs
 // a single bar.
 type Market struct {
-	client  MarketSource
-	timeout time.Duration
+	client   MarketSource
+	calendar calendar.Provider
+	timeout  time.Duration
 
 	mu       sync.Mutex
 	cache    map[string][]order.Bar
@@ -52,9 +53,16 @@ type Market struct {
 // fill model.
 var _ market.BarProvider = (*Market)(nil)
 
-func NewMarket(c MarketSource) *Market {
+// NewMarket returns a market adapter over the market-data service.
+//
+// The calendar is the exchange calendar: the adapter asks it which days
+// the exchange traded to work out the window of bars to request. It is
+// the same provider the App trades on, so the two cannot disagree
+// about the session a bar belongs to.
+func NewMarket(c MarketSource, cal calendar.Provider) *Market {
 	return &Market{
 		client:   c,
+		calendar: cal,
 		timeout:  DefaultMarketTimeout,
 		cache:    map[string][]order.Bar{},
 		coverage: map[string]*coverage{},
@@ -87,7 +95,10 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 		return nil, fmt.Errorf("market adapter: symbol is required")
 	}
 
-	from, to := windowFor(lookback, asOf)
+	from, to, err := m.windowFor(lookback, asOf)
+	if err != nil {
+		return nil, err
+	}
 
 	bars, err := m.barsIn(ctx, symbol, from, to)
 	if err != nil {
@@ -311,14 +322,22 @@ const windowMargin = 5
 // The window is computed with the trading calendar rather than a
 // day-count estimate, so a request for 20 bars asks for about 20
 // sessions' worth of range rather than a fixed multiple of it.
-func windowFor(lookback int, asOf time.Time) (from, to time.Time) {
+func (m *Market) windowFor(lookback int, asOf time.Time) (from, to time.Time, err error) {
+	if m.calendar == nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("market adapter: nil calendar provider")
+	}
+
 	to = nyseDay(asOf)
 
 	want := lookback + windowMargin
 	candidate := to
 	count := 0
 	for i := 0; i < want*3+30; i++ {
-		if calendar.TradingDay(candidate) {
+		trading, err := m.calendar.TradingDay(candidate)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("market adapter: calendar: %w", err)
+		}
+		if trading {
 			count++
 			if count == want {
 				break
@@ -326,7 +345,7 @@ func windowFor(lookback int, asOf time.Time) (from, to time.Time) {
 		}
 		candidate = candidate.AddDate(0, 0, -1)
 	}
-	return candidate, to
+	return candidate, to, nil
 }
 
 // Universe is the subset of marketdata.Client functionality the

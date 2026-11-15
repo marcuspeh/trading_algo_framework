@@ -7,6 +7,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/broker/mock"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/order"
@@ -38,7 +39,7 @@ func TestExecutor_ReportsTheFillPrice(t *testing.T) {
 		Bars: fillBars{
 			"AAPL": {Symbol: "AAPL", Timestamp: session, Open: 100, High: 110, Low: 90, Close: 105},
 		},
-		Session: clock.NewSession(clk, nil, calendar.TradingDay),
+		Session: clock.NewSession(clk, published.New()),
 	})
 
 	exec := execution.NewBroker(m)

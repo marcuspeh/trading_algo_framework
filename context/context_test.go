@@ -7,6 +7,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -39,7 +40,7 @@ func (fakePortfolio) Value() float64                 { return 1000 }
 
 type fakeConfig struct{}
 
-func (fakeConfig) Get(string) (string, error)                  { return "", nil }
+func (fakeConfig) Get(string) (string, error) { return "", nil }
 
 func newCtx(t *testing.T, mkt *fakeMarket, uni *fakeUniverse, today time.Time) (interface {
 	Today() time.Time
@@ -51,13 +52,14 @@ func newCtx(t *testing.T, mkt *fakeMarket, uni *fakeUniverse, today time.Time) (
 	t.Helper()
 	clk := &backtestClock{t: today}
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:     published.New(),
 		Clock:        clk,
 		Portfolio:    fakePortfolio{},
 		Market:       mkt,
 		Universe:     uni,
 		Config:       fakeConfig{},
 		Logger:       nopLogger{},
-		IsTradingDay: func(d time.Time) bool { return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday },
+		IsTradingDay: published.TradingDay,
 	})
 	if err != nil {
 		return nil, err
@@ -97,7 +99,8 @@ func TestContext_TodayAndNowFromClock(t *testing.T) {
 // because the current one has not happened yet.
 func TestContext_BarsUsesTheSessionAnchor(t *testing.T) {
 	// 14:30 ET on 2024-01-02 - before the close, so the anchor is the
-	// previous session, 2024-01-01.
+	// previous session. 2024-01-01 was New Year's Day, so the previous
+	// session is Friday 2023-12-29.
 	now := time.Date(2024, 1, 2, 14, 30, 0, 0, clock.NYSE)
 	mkt := &fakeMarket{}
 	c, err := newCtx(t, mkt, &fakeUniverse{}, now)
@@ -105,7 +108,7 @@ func TestContext_BarsUsesTheSessionAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = c.Bars("AAPL", 5)
-	want := time.Date(2024, 1, 1, 0, 0, 0, 0, clock.NYSE)
+	want := time.Date(2023, 12, 29, 0, 0, 0, 0, clock.NYSE)
 	if !mkt.asOf.Equal(want) {
 		t.Fatalf("Bars asOf=%v want %v", mkt.asOf, want)
 	}
@@ -170,6 +173,7 @@ func TestContext_BarsCachedWithinDay(t *testing.T) {
 		{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100},
 	}}
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
 		Clock:     &backtestClock{t: today},
 		Portfolio: fakePortfolio{},
 		Market:    mkt,
@@ -198,6 +202,7 @@ func TestContext_BarsNotCachedAcrossDays(t *testing.T) {
 	}}
 	clk := &backtestClock{t: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)}
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
 		Clock:     clk,
 		Portfolio: fakePortfolio{},
 		Market:    mkt,
@@ -225,6 +230,7 @@ func TestContext_BarsNotCachedAcrossDays(t *testing.T) {
 // on a nil function call.
 func TestContext_DefaultTradingDayFuncDoesNotPanic(t *testing.T) {
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
 		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
 		Portfolio: fakePortfolio{},
 		Market:    &fakeMarket{},
@@ -247,6 +253,7 @@ func TestContext_DefaultTradingDayFuncDoesNotPanic(t *testing.T) {
 // TestContext_ModeDefaultsToBacktest verifies the mode default.
 func TestContext_ModeDefaultsToBacktest(t *testing.T) {
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
 		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
 		Portfolio: fakePortfolio{},
 		Market:    &fakeMarket{},
@@ -265,6 +272,7 @@ func TestContext_ModeDefaultsToBacktest(t *testing.T) {
 // TestContext_ExplicitModeIsUsed verifies an explicit mode wins.
 func TestContext_ExplicitModeIsUsed(t *testing.T) {
 	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
 		Clock:     &backtestClock{t: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
 		Portfolio: fakePortfolio{},
 		Market:    &fakeMarket{},

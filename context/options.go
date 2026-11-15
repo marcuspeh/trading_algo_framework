@@ -1,9 +1,11 @@
 package context
 
 import (
+	"time"
+
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
-	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/universe"
 )
 
@@ -24,18 +26,25 @@ type Options struct {
 	Broker job.OrderBroker
 
 	// Session resolves the session a timestamp belongs to. When nil, a
-	// Session is built from the Clock, the default market close and
-	// the trading-day predicate.
+	// Session is built from the Clock and the Calendar.
 	Session *clock.Session
+
+	// Calendar is the exchange calendar: it says which days the
+	// exchange traded and when each session opened and closed. It is
+	// required when no Session is supplied.
+	Calendar calendar.Provider
 }
 
 // GetSession returns the configured Session, building a default one
-// from the Clock and the trading-day predicate when none was supplied.
+// from the Clock and the Calendar when none was supplied.
 func (opts *Options) GetSession() *clock.Session {
 	if opts.Session != nil {
 		return opts.Session
 	}
-	return clock.NewSession(opts.Clock, nil, opts.GetIsTradingDay())
+	if opts.Calendar == nil {
+		return nil
+	}
+	return clock.NewSession(opts.Clock, opts.Calendar)
 }
 
 func (opts *Options) Validate() error {
@@ -57,18 +66,29 @@ func (opts *Options) Validate() error {
 	if opts.Logger == nil {
 		return errMissing("logger")
 	}
+	if opts.Session == nil && opts.Calendar == nil {
+		return errMissing("calendar")
+	}
 
 	return nil
 }
 
-// GetIsTradingDay returns the configured trading-day predicate, falling
-// back to portfolio.NYSEWeekdays when none was supplied.
+// GetIsTradingDay returns the configured trading-day predicate.
+//
+// When none was supplied the predicate comes from the calendar: the
+// exchange's own trading days.
 func (opts *Options) GetIsTradingDay() TradingDayFunc {
-	if opts.IsTradingDay == nil {
-		return portfolio.NYSEWeekdays
+	if opts.IsTradingDay != nil {
+		return opts.IsTradingDay
+	}
+	if opts.Calendar != nil {
+		return calendar.NewTradingDayFunc(opts.Calendar)
+	}
+	if opts.Session != nil {
+		return opts.Session.IsTradingDay
 	}
 
-	return opts.IsTradingDay
+	return func(time.Time) bool { return true }
 }
 
 // GetMode returns the configured mode, falling back to ModeBacktest.

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clock"
 )
 
@@ -68,7 +68,7 @@ func TestSession_Anchor(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := clock.NewSession(clock.NewBacktest(tc.now), nil, calendar.TradingDay)
+			s := clock.NewSession(clock.NewBacktest(tc.now), published.New())
 			got := s.Anchor(tc.now)
 			if !got.Equal(tc.want) {
 				t.Errorf("Anchor=%v want %v", got, tc.want)
@@ -82,7 +82,7 @@ func TestSession_Anchor(t *testing.T) {
 func TestSession_AnchorOnAnEarlyCloseDay(t *testing.T) {
 	// 2026-11-27 is the Friday after Thanksgiving.
 	now := at(2026, time.November, 27, 14, 0)
-	s := clock.NewSession(clock.NewBacktest(now), nil, calendar.TradingDay)
+	s := clock.NewSession(clock.NewBacktest(now), published.New())
 
 	if got := s.Anchor(now); !got.Equal(day(2026, time.November, 27)) {
 		t.Errorf("Anchor=%v want the early-close day itself", got)
@@ -98,7 +98,7 @@ func TestSession_AnchorOnAnEarlyCloseDay(t *testing.T) {
 // Friday is the Wednesday.
 func TestSession_AnchorBeforeAnEarlyClose(t *testing.T) {
 	now := at(2026, time.November, 27, 11, 0)
-	s := clock.NewSession(clock.NewBacktest(now), nil, calendar.TradingDay)
+	s := clock.NewSession(clock.NewBacktest(now), published.New())
 
 	if got := s.Anchor(now); !got.Equal(day(2026, time.November, 25)) {
 		t.Errorf("Anchor=%v want the previous session", got)
@@ -108,7 +108,7 @@ func TestSession_AnchorBeforeAnEarlyClose(t *testing.T) {
 // The session close is per date, and the trading-day predicate is the
 // one the session was built with.
 func TestSession_CloseAndTradingDay(t *testing.T) {
-	s := clock.NewSession(clock.NewBacktest(day(2024, time.January, 2)), nil, calendar.TradingDay)
+	s := clock.NewSession(clock.NewBacktest(day(2024, time.January, 2)), published.New())
 
 	if got := s.Close(day(2024, time.January, 2)); got.Hour() != 16 {
 		t.Errorf("close=%v want 16:00", got)
@@ -121,24 +121,13 @@ func TestSession_CloseAndTradingDay(t *testing.T) {
 	}
 }
 
-// A session built without a close function uses the NYSE calendar.
-func TestSession_DefaultsToTheNYSECalendar(t *testing.T) {
-	s := clock.NewSession(clock.NewBacktest(day(2024, time.January, 2)), nil, nil)
-
-	// Without a predicate every day is a trading day, but the anchor
-	// still respects the close: at midday on a Saturday, Saturday's
-	// close has not passed, so the anchor is Friday.
-	now := at(2024, time.January, 6, 12, 0)
-	if got := s.Anchor(now); !got.Equal(day(2024, time.January, 5)) {
-		t.Errorf("Anchor=%v want the previous day", got)
-	}
-
-	// After Saturday's close, it is Saturday itself.
-	after := at(2024, time.January, 6, 20, 0)
-	if got := s.Anchor(after); !got.Equal(day(2024, time.January, 6)) {
-		t.Errorf("Anchor=%v want the same day", got)
-	}
-	if got := s.Close(day(2024, time.January, 2)); got.Hour() != 16 {
-		t.Errorf("close=%v want 16:00", got)
-	}
+// A session needs a calendar: without one it cannot say when a
+// session ends, so building it is a programming error.
+func TestSession_NeedsACalendar(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected a panic when no calendar is supplied")
+		}
+	}()
+	clock.NewSession(clock.NewBacktest(day(2024, time.January, 2)), nil)
 }

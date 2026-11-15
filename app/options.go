@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/backtest"
 	"github.com/marcuspeh/trading-framework/broker/mock"
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
@@ -35,18 +36,25 @@ type RiskManager = risk.Manager
 type App struct {
 	mu sync.Mutex
 
-	clock      clock.Clock
-	btClock    *clock.BacktestClock
-	session    *clock.Session
-	executor   execution.Executor
-	portfolio  portfolio.Portfolio
-	risk       RiskManager
-	market     MarketClient
-	universe   universe.Client
-	config     job.Config
-	logger     job.Logger
-	tradingDay portfolio.TradingDayFunc
-	marketClose func(time.Time) time.Time
+	clock     clock.Clock
+	btClock   *clock.BacktestClock
+	session   *clock.Session
+	executor  execution.Executor
+	portfolio portfolio.Portfolio
+	risk      RiskManager
+	market    MarketClient
+	universe  universe.Client
+	config    job.Config
+	logger    job.Logger
+	calendar  calendar.Provider
+
+	// tradingDay is the effective trading-day predicate, derived from
+	// the calendar in resolve(). tradingDayOverride and
+	// marketCloseOverride are the strategy's replacements for the
+	// calendar's answers.
+	tradingDay          portfolio.TradingDayFunc
+	tradingDayOverride  portfolio.TradingDayFunc
+	marketCloseOverride func(time.Time) time.Time
 
 	// Convenience configs. If set, Run() wires the matching stack.
 	backtestCfg *BacktestConfig
@@ -77,13 +85,13 @@ type warmupEntry struct {
 // Option configures the App.
 type Option func(*App)
 
-func WithRiskManager(r RiskManager) Option                 { return func(a *App) { a.risk = r } }
+func WithRiskManager(r RiskManager) Option { return func(a *App) { a.risk = r } }
 
 // WithMarketCloseFunc replaces the exchange calendar's session close.
 //
 // It takes the close of the session on a date and returns the time of
-// it. The default is the NYSE calendar: 16:00 ET, or 13:00 ET on an
-// early-close day.
+// it. The default is the calendar's own answer: 16:00 ET, or 13:00 ET
+// on an early-close day.
 //
 // The escape hatch is for a house view of the schedule that differs
 // from the published one - an exchange that closes at a different
@@ -91,15 +99,50 @@ func WithRiskManager(r RiskManager) Option                 { return func(a *App)
 // The function is called for every date the framework resolves a
 // session for, so it should be cheap and must be pure.
 //
-// Passing nil restores the default.
+// Passing nil restores the calendar's answer.
 func WithMarketCloseFunc(fn func(date time.Time) time.Time) Option {
-	return func(a *App) { a.marketClose = fn }
+	return func(a *App) { a.marketCloseOverride = fn }
 }
-func WithMarketClient(m MarketClient) Option               { return func(a *App) { a.market = m } }
-func WithUniverseClient(u universe.Client) Option          { return func(a *App) { a.universe = u } }
-func WithConfigClient(c job.Config) Option                 { return func(a *App) { a.config = c } }
-func WithLogger(l job.Logger) Option                       { return func(a *App) { a.logger = l } }
-func WithTradingDayFunc(f portfolio.TradingDayFunc) Option { return func(a *App) { a.tradingDay = f } }
+
+// WithCalendarProvider sets the exchange calendar the framework trades
+// on.
+//
+// The provider answers whether the exchange traded on a date and when
+// the session opened and closed. It is required: a provider backed by
+// the market-data-service - calendar.NewService - keeps the framework
+// on the exchange's published schedule.
+//
+// A provider that cannot answer is fatal: the framework raises a
+// *calendar.ProviderError and Run returns it as an error. Trading on a
+// schedule it could not confirm is worse than not trading.
+//
+// WithTradingDayFunc and WithMarketCloseFunc win over the provider, so
+// a strategy that overrides one of them keeps its override.
+func WithCalendarProvider(p calendar.Provider) Option {
+	return func(a *App) { a.calendar = p }
+}
+func WithMarketClient(m MarketClient) Option      { return func(a *App) { a.market = m } }
+func WithUniverseClient(u universe.Client) Option { return func(a *App) { a.universe = u } }
+func WithConfigClient(c job.Config) Option        { return func(a *App) { a.config = c } }
+func WithLogger(l job.Logger) Option              { return func(a *App) { a.logger = l } }
+
+// WithTradingDayFunc replaces the exchange calendar's trading days.
+//
+// It takes a date and reports whether the strategy trades on it. The
+// default is the calendar's own answer.
+//
+// The escape hatch is for a strategy that trades on a different
+// exchange's days, or on a schedule of its own. On the days it names
+// that the exchange was closed, the standard session - 09:30 to 16:00
+// ET - stands in, so a close-relative slot still resolves.
+//
+// The function is called for every date the framework resolves a
+// session for, so it should be cheap and must be pure.
+//
+// Passing nil restores the calendar's answer.
+func WithTradingDayFunc(f portfolio.TradingDayFunc) Option {
+	return func(a *App) { a.tradingDayOverride = f }
+}
 
 // WithStdoutLogger writes log lines to stdout.
 func WithStdoutLogger() Option {
@@ -164,8 +207,7 @@ func WithLive(cfg LiveConfig) Option {
 // NewApp constructs an App with the supplied options.
 func NewApp(opts ...Option) *App {
 	a := &App{
-		logger:     logging.Nop(),
-		tradingDay: portfolio.NYSEWeekdays,
+		logger: logging.Nop(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -217,7 +259,22 @@ func (a *App) Run() error {
 // A live run blocks until its context is done, so a caller that wants
 // to stop a trading session - or a test that wants to drive one - needs
 // a context it can cancel.
-func (a *App) RunContext(ctx context.Context) error {
+//
+// A calendar provider that cannot answer is fatal: the run fails with
+// the provider's error rather than trading on an unconfirmed schedule.
+func (a *App) RunContext(ctx context.Context) (err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		perr, ok := r.(*calendar.ProviderError)
+		if !ok {
+			panic(r)
+		}
+		err = fmt.Errorf("app: %w", perr)
+	}()
+
 	if err := a.resolve(); err != nil {
 		return err
 	}

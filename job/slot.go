@@ -29,9 +29,10 @@ const (
 
 // Session describes the trading session a date belongs to.
 //
-// The framework's default is the NYSE calendar: a session opens at
-// 09:30 ET and closes at 16:00 ET, or 13:00 ET on an early-close day.
-// A strategy may replace the close - see app.WithMarketCloseFunc.
+// The session's boundaries come from the exchange calendar the App was
+// built with: a session opens at 09:30 ET and closes at 16:00 ET, or
+// 13:00 ET on an early-close day. A strategy may replace the close -
+// see app.WithMarketCloseFunc.
 type Session interface {
 	// Open returns the open of the session on a date.
 	Open(date time.Time) time.Time
@@ -137,17 +138,26 @@ func (s Slot) Validate() error {
 // The session supplies the boundaries, so a strategy that replaces the
 // close moves its close-relative slots with it.
 func (s Slot) Resolve(date time.Time, sess Session) time.Time {
-	if sess == nil {
-		sess = calendar.NYSESession{}
-	}
 	switch s.anchor {
 	case anchorOpen:
-		return sess.Open(date).Add(s.offset)
+		return session(sess).Open(date).Add(s.offset)
 	case anchorClose:
-		return sess.Close(date).Add(s.offset)
+		return session(sess).Close(date).Add(s.offset)
 	}
 	y, m, d := date.Date()
 	return time.Date(y, m, d, s.fixed.Hour, s.fixed.Minute, 0, 0, calendar.NYSE)
+}
+
+// session returns the session a relative slot resolves against.
+//
+// A relative slot needs the session's boundaries, and the framework has
+// no default for them: the exchange calendar is the only source. A
+// missing session is a programming error, so it panics.
+func session(sess Session) Session {
+	if sess == nil {
+		panic("job: a relative slot needs a session")
+	}
+	return sess
 }
 
 // formatOffset renders a signed duration for a slot description.

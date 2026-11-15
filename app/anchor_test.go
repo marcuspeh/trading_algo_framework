@@ -7,6 +7,7 @@ import (
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -17,7 +18,7 @@ func anchorBars() map[string][]order.Bar {
 	out := map[string][]order.Bar{}
 	day := time.Date(2024, 1, 2, 0, 0, 0, 0, calendar.NYSE)
 	for i := 0; i < 10; i++ {
-		if !calendar.TradingDay(day) {
+		if !published.TradingDay(day) {
 			day = day.AddDate(0, 0, 1)
 			continue
 		}
@@ -25,8 +26,8 @@ func anchorBars() map[string][]order.Bar {
 			Symbol:    "AAPL",
 			Timestamp: day,
 			Open:      100, High: 110, Low: 90,
-			Close:     float64(100 + i),
-			Volume:    1_000_000,
+			Close:  float64(100 + i),
+			Volume: 1_000_000,
 		})
 		day = day.AddDate(0, 0, 1)
 	}
@@ -64,6 +65,7 @@ func TestApp_JobSeesTheSessionItShould(t *testing.T) {
 	}
 
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 3, 0, 0, 0, 0, calendar.NYSE),
 			End:          time.Date(2024, 1, 5, 0, 0, 0, 0, calendar.NYSE),

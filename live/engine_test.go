@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/broker"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/execution"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
@@ -81,7 +82,7 @@ func (f *fakeBroker) GetAccountNAV(_ context.Context) (*broker.AccountNAVRespons
 // connection flag is what matters.
 func TestEngine_FailsFastWhenTheBrokerIsDisconnected(t *testing.T) {
 	b := &fakeBroker{health: broker.HealthResponse{Status: "ok", IBKRConnected: false}}
-	e, err := live.New(live.Config{Broker: b, Logger: nil})
+	e, err := live.New(live.Config{Broker: b, Logger: nil, Calendar: published.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestEngine_FailsFastWhenTheBrokerIsDisconnected(t *testing.T) {
 
 func TestEngine_FailsFastWhenTheHealthCheckFails(t *testing.T) {
 	b := &fakeBroker{healthErr: errors.New("connection refused")}
-	e, err := live.New(live.Config{Broker: b})
+	e, err := live.New(live.Config{Broker: b, Calendar: published.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestEngine_ReconcilesBeforeEveryJob(t *testing.T) {
 		nav:       5000,
 	}
 
-	engine, err := live.New(live.Config{Broker: b})
+	engine, err := live.New(live.Config{Broker: b, Calendar: published.New()})
 	if err != nil {
 		t.Fatal(err)
 	}

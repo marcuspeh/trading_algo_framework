@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/calendar"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -38,6 +39,7 @@ func TestApp_ScheduleFollowsTheSession(t *testing.T) {
 
 		mk := func(name string, s job.Slot) {
 			a := app.NewApp(
+				app.WithCalendarProvider(published.New()),
 				app.WithBacktest(app.BacktestConfig{
 					Start:        day,
 					End:          day.AddDate(0, 0, 1),
@@ -120,6 +122,7 @@ func TestApp_JobsDoNotFireOnHolidays(t *testing.T) {
 
 	var fired int
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        holiday,
 			End:          holiday.AddDate(0, 0, 1),

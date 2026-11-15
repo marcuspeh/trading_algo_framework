@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/job"
 )
 
@@ -31,21 +30,22 @@ func NewBacktest(log Logger) *Backtest {
 		log = nopLogger{}
 	}
 	return &Backtest{
-		byKey:   map[string]job.Job{},
-		log:     log,
-		session: calendar.NYSESession{},
+		byKey: map[string]job.Job{},
+		log:   log,
 	}
 }
 
 // SetSession sets the session that close-relative slots resolve
 // against.
 //
-// The default is the NYSE calendar. A strategy that replaces the
-// session close replaces it here too.
+// The session comes from the exchange calendar the App was built with.
+// A strategy that replaces the session close replaces it here too.
+//
+// A scheduler with no session resolves a fixed-time slot, but a
+// close-relative one has no boundaries to resolve against and panics.
+// The framework has no default session: the exchange calendar is the
+// only source.
 func (s *Backtest) SetSession(sess job.Session) {
-	if sess == nil {
-		sess = calendar.NYSESession{}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.session = sess

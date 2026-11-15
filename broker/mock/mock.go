@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/marcuspeh/trading-framework/broker"
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/order"
@@ -34,6 +35,12 @@ type Config struct {
 
 	// Session resolves the session a timestamp belongs to.
 	Session *clock.Session
+
+	// Calendar is the exchange calendar. It is required when no
+	// Session is supplied: the session's boundaries come from it.
+	//
+	// Supply one of the two, or New panics.
+	Calendar calendar.Provider
 
 	// SlippageBps is the adverse price movement applied to every fill,
 	// in basis points of the fill price.
@@ -141,6 +148,11 @@ type restingOrder struct {
 }
 
 // New returns a Mock broker.
+//
+// A session resolves the session a timestamp belongs to, and the
+// exchange calendar is where its boundaries come from. Supply a Session
+// or a Calendar: with neither, New panics. The framework will not
+// guess when a session ended.
 func New(cfg Config) *Mock {
 	p := cfg.Portfolio
 	if p == nil {
@@ -148,20 +160,23 @@ func New(cfg Config) *Mock {
 	}
 	s := cfg.Session
 	if s == nil {
-		s = clock.NewSession(clock.NewBacktest(time.Now()), nil, nil)
+		if cfg.Calendar == nil {
+			panic("mock: a session or a calendar provider is required")
+		}
+		s = clock.NewSession(clock.NewBacktest(time.Now()), cfg.Calendar)
 	}
 	return &Mock{
-		portfolio:         p,
-		bars:              cfg.Bars,
-		session:           s,
-		slippageBps:       cfg.SlippageBps,
-		commission:        cfg.Commission,
+		portfolio:          p,
+		bars:               cfg.Bars,
+		session:            s,
+		slippageBps:        cfg.SlippageBps,
+		commission:         cfg.Commission,
 		commissionPerShare: cfg.CommissionPerShare,
-		nextID:            1000,
-		orders:            map[int]*restingOrder{},
-		byKey:             map[string]int{},
-		finalStatus:       map[int]string{},
-		fillPrices:        map[int]float64{},
+		nextID:             1000,
+		orders:             map[int]*restingOrder{},
+		byKey:              map[string]int{},
+		finalStatus:        map[int]string{},
+		fillPrices:         map[int]float64{},
 	}
 }
 
@@ -223,7 +238,7 @@ func (m *Mock) PlaceLimitOrder(ctx context.Context, req broker.LimitOrderRequest
 
 	now := m.session.Clock().Now()
 	resting := &restingOrder{
-		id:    id,
+		id: id,
 		order: order.Order{
 			Symbol:   req.Contract.Symbol,
 			Side:     sideOf(req.Action),
@@ -263,7 +278,7 @@ func (m *Mock) PlaceBracketOrder(ctx context.Context, req broker.BracketOrderReq
 
 	now := m.session.Clock().Now()
 	m.orders[id] = &restingOrder{
-		id:    id,
+		id: id,
 		order: order.Order{
 			Symbol:   req.Contract.Symbol,
 			Side:     sideOf(req.Action),
@@ -467,7 +482,7 @@ func (m *Mock) armProtectiveLegs(parent *restingOrder, session time.Time) {
 		id := m.nextID
 		m.nextID++
 		m.orders[id] = &restingOrder{
-			id:    id,
+			id: id,
 			order: order.Order{
 				Symbol:   parent.order.Symbol,
 				Side:     opposite(parent.side),
