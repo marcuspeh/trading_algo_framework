@@ -19,6 +19,10 @@ type Backtest struct {
 	jobs  []job.Job
 	byKey map[string]job.Job
 	log   Logger
+
+	// session supplies the session boundaries that close-relative
+	// slots resolve against.
+	session job.Session
 }
 
 func NewBacktest(log Logger) *Backtest {
@@ -29,6 +33,22 @@ func NewBacktest(log Logger) *Backtest {
 		byKey: map[string]job.Job{},
 		log:   log,
 	}
+}
+
+// SetSession sets the session that close-relative slots resolve
+// against.
+//
+// The session comes from the exchange calendar the App was built with.
+// A strategy that replaces the session close replaces it here too.
+//
+// A scheduler with no session resolves a fixed-time slot, but a
+// close-relative one has no boundaries to resolve against and panics.
+// The framework has no default session: the exchange calendar is the
+// only source.
+func (s *Backtest) SetSession(sess job.Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.session = sess
 }
 
 func (s *Backtest) Register(j job.Job) error {
@@ -50,13 +70,10 @@ func (s *Backtest) Jobs() []job.Job {
 	defer s.mu.Unlock()
 	out := make([]job.Job, len(s.jobs))
 	copy(out, s.jobs)
+	// Jobs are sorted by name. A relative slot has no fixed time to sort
+	// by - it resolves differently on a normal day and an early-close
+	// day - so name order is what keeps a backtest deterministic.
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Time.Hour != out[j].Time.Hour {
-			return out[i].Time.Hour < out[j].Time.Hour
-		}
-		if out[i].Time.Minute != out[j].Time.Minute {
-			return out[i].Time.Minute < out[j].Time.Minute
-		}
 		return out[i].Name < out[j].Name
 	})
 	return out
@@ -88,21 +105,15 @@ func (s *Backtest) Run(ctx context.Context, jc JobContext, h Handler) error {
 	return nil
 }
 
-// FireAt fires every Job whose TimeOfDay matches `at` (compared against
-// at's hour/minute in its location), in name order. Returns the first
-// non-nil error from the Handler.
+// FireAt fires every Job whose slot resolves to `at`, in name order.
+//
+// Each job's slot is resolved against the date of `at`, so a job
+// scheduled for the close fires at 16:00 on an ordinary day and at
+// 13:00 on an early-close day.
+//
+// Returns the first non-nil error from the Handler.
 func (s *Backtest) FireAt(ctx context.Context, jc JobContext, h Handler, at time.Time) error {
-	slot := job.TimeOfDay{Hour: at.Hour(), Minute: at.Minute()}
-	var matched []job.Job
-	s.mu.Lock()
-	for _, j := range s.jobs {
-		if j.Time.Equal(slot) {
-			matched = append(matched, j)
-		}
-	}
-	s.mu.Unlock()
-	sort.SliceStable(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
-
+	matched := s.JobsAt(at)
 	for _, j := range matched {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -112,6 +123,35 @@ func (s *Backtest) FireAt(ctx context.Context, jc JobContext, h Handler, at time
 		}
 	}
 	return nil
+}
+
+// JobsAt returns the jobs whose slot resolves to the given time, sorted
+// by name.
+//
+// Slots are matched on wall-clock time of day rather than on the
+// instant, so a caller may pass the time in any location.
+func (s *Backtest) JobsAt(at time.Time) []job.Job {
+	s.mu.Lock()
+	jobs := make([]job.Job, len(s.jobs))
+	copy(jobs, s.jobs)
+	s.mu.Unlock()
+
+	var matched []job.Job
+	for _, j := range jobs {
+		if sameTimeOfDay(j.Time.Resolve(at, s.session), at) {
+			matched = append(matched, j)
+		}
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		return matched[i].Name < matched[j].Name
+	})
+	return matched
+}
+
+// sameTimeOfDay reports whether two times carry the same wall-clock
+// hour and minute.
+func sameTimeOfDay(a, b time.Time) bool {
+	return a.Hour() == b.Hour() && a.Minute() == b.Minute()
 }
 
 func (s *Backtest) fire(ctx context.Context, jc JobContext, h Handler, j job.Job, at time.Time) error {

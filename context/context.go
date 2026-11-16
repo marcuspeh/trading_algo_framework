@@ -6,12 +6,14 @@ package context
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/job"
+	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/order"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/universe"
@@ -23,9 +25,7 @@ type Portfolio = portfolio.Portfolio
 
 // MarketClient is the framework's market-data dependency. The clients/
 // package supplies the real adapter.
-type MarketClient interface {
-	Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error)
-}
+type MarketClient = market.Client
 
 // TradingDayFunc is the signature of an exchange-calendar predicate.
 type TradingDayFunc = portfolio.TradingDayFunc
@@ -38,6 +38,7 @@ type Logger = job.Logger
 
 type ctx struct {
 	clock      clock.Clock
+	session    *clock.Session
 	portfolio  Portfolio
 	market     MarketClient
 	universe   universe.Client
@@ -45,25 +46,26 @@ type ctx struct {
 	logger     Logger
 	tradingDay TradingDayFunc
 	mode       job.Mode
+	broker     job.OrderBroker
 
 	barCacheMu sync.Mutex
-	barCache   map[string]barCacheEntry
+	barCache   map[string]map[string]barCacheEntry
 }
 
-// barCacheEntry holds the bars fetched for one symbol, along with the
-// date they were fetched for.
+// barCacheEntry holds the bars fetched for one symbol and one session.
 //
-// The date is recorded explicitly because the newest bar is dated by
+// The session is recorded explicitly because the newest bar is dated by
 // its trading day, which is often earlier than the day the fetch was
 // made - a fetch made on a Monday returns Friday's bar - so it cannot
-// stand in for "these bars were fetched for this day".
+// stand in for "these bars were fetched for this session".
 type barCacheEntry struct {
 	asOf time.Time
 	bars []order.Bar
 }
 
 // New constructs a Context. All dependencies are required except
-// IsTradingDay (defaults to NYSEWeekdays) and Mode (defaults to
+// IsTradingDay (defaults to the exchange calendar's trading days) and
+// Mode (defaults to
 // ModeBacktest).
 func New(opts Options) (job.Context, error) {
 	err := opts.Validate()
@@ -73,6 +75,7 @@ func New(opts Options) (job.Context, error) {
 
 	return &ctx{
 		clock:      opts.Clock,
+		session:    opts.GetSession(),
 		portfolio:  opts.Portfolio,
 		market:     opts.Market,
 		universe:   opts.Universe,
@@ -80,7 +83,8 @@ func New(opts Options) (job.Context, error) {
 		logger:     opts.Logger,
 		tradingDay: opts.GetIsTradingDay(),
 		mode:       opts.GetMode(),
-		barCache:   map[string]barCacheEntry{},
+		broker:     opts.Broker,
+		barCache:   map[string]map[string]barCacheEntry{},
 	}, nil
 }
 
@@ -96,6 +100,17 @@ func (c *ctx) Mode() job.Mode {
 	return c.mode
 }
 
+// Bars returns the most recent bars for a symbol, ending on the
+// session the clock is anchored to.
+//
+// The anchor is the most recent session whose close has passed, so a
+// job that fires before the close reads the previous session and a job
+// that fires at or after the close reads the current one. A strategy
+// can never see a bar that had not been printed yet.
+//
+// A request for more bars than the service has returns
+// job.ErrInsufficientBars rather than a short history, so an
+// indicator is never silently computed over fewer bars than asked for.
 func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	if lookback <= 0 {
 		return nil, errInvalid("lookback must be > 0")
@@ -104,16 +119,16 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 		return nil, errInvalid("symbol is required")
 	}
 
-	asOf := c.clock.Today()
+	asOf := c.session.Anchor(c.clock.Now())
 
 	c.barCacheMu.Lock()
-	cached, ok := c.barCache[symbol]
+	cached, ok := c.barCache[symbol][sessionKey(asOf)]
 	c.barCacheMu.Unlock()
 
-	// A cached entry is reusable when it was fetched for the same day
-	// and holds at least as many bars as were asked for. Anything else
-	// - a different day, or a shorter history than requested - needs a
-	// fresh fetch.
+	// A cached entry is reusable when it was fetched for the same
+	// session and holds at least as many bars as were asked for.
+	// Anything else - a different session, or a shorter history than
+	// requested - needs a fresh fetch.
 	if ok && sameDate(cached.asOf, asOf) && len(cached.bars) >= lookback {
 		return cloneBars(cached.bars[len(cached.bars)-lookback:]), nil
 	}
@@ -128,9 +143,24 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 	})
 
 	c.barCacheMu.Lock()
-	c.barCache[symbol] = barCacheEntry{asOf: asOf, bars: bars}
+	if c.barCache[symbol] == nil {
+		c.barCache[symbol] = map[string]barCacheEntry{}
+	}
+	c.barCache[symbol][sessionKey(asOf)] = barCacheEntry{asOf: asOf, bars: bars}
+	// The anchor only moves forward, so a session older than this one
+	// will never be read again. Dropping it keeps the cache the size of
+	// the symbols in play rather than the size of the backtest.
+	for key := range c.barCache[symbol] {
+		if key < sessionKey(asOf) {
+			delete(c.barCache[symbol], key)
+		}
+	}
 	c.barCacheMu.Unlock()
 
+	if len(bars) < lookback {
+		return nil, fmt.Errorf("%w: %s has %d bars, %d requested",
+			job.ErrInsufficientBars, symbol, len(bars), lookback)
+	}
 	if len(bars) > lookback {
 		bars = bars[len(bars)-lookback:]
 	}
@@ -181,16 +211,31 @@ func (c *ctx) Logger() Logger {
 	return c.logger
 }
 
-func (c *ctx) reset() {
-	c.barCacheMu.Lock()
-	defer c.barCacheMu.Unlock()
-	c.barCache = map[string]barCacheEntry{}
+// OpenOrders returns the orders resting at the broker.
+func (c *ctx) OpenOrders() ([]order.Order, error) {
+	if c.broker == nil {
+		return nil, errMissing("broker")
+	}
+	return c.broker.OpenOrders(context.Background())
 }
 
-// Reset clears the per-Context bar cache. The engine calls this when the
-// date rolls forward so the next Bars() call refetches.
-func Reset(c job.Context) {
-	if rc, ok := c.(interface{ reset() }); ok {
-		rc.reset()
+// CancelOrder cancels a resting order by its id.
+func (c *ctx) CancelOrder(orderID string) error {
+	if c.broker == nil {
+		return errMissing("broker")
 	}
+	return c.broker.Cancel(context.Background(), orderID)
 }
+
+// UpdateOrder changes the limit price of a resting order.
+func (c *ctx) UpdateOrder(orderID string, limit float64) error {
+	if c.broker == nil {
+		return errMissing("broker")
+	}
+	return c.broker.Update(context.Background(), orderID, limit)
+}
+
+// The bar cache is keyed by the session the bars were fetched for, so
+// it invalidates itself when the session rolls forward. There is no
+// reset to call: a job that reads the same session twice is served
+// from the cache, and a job that reads a new session is not.

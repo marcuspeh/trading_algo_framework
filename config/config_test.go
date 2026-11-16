@@ -97,12 +97,6 @@ func TestFile_ReloadPicksUpChanges(t *testing.T) {
 	}
 }
 
-func TestFile_WatchIsNotSupported(t *testing.T) {
-	cfg := config.NewMap(nil)
-	if _, err := cfg.Watch("key", nil, nil); err == nil {
-		t.Fatal("expected error from Watch")
-	}
-}
 
 func TestFile_SatisfiesJobConfig(t *testing.T) {
 	var _ job.Config = config.NewMap(nil)

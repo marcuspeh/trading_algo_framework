@@ -7,6 +7,7 @@ import (
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/clock"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -26,11 +27,11 @@ func TestBacktest_ContextSeesCurrentSimulatedDate(t *testing.T) {
 	}
 
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        start,
 			End:          end,
 			StartingCash: 10_000,
-			BarSource:    clients.NewStaticBarSource(map[string][]order.Bar{}),
 		}),
 		app.WithMarketClient(clients.NewStaticBars(map[string][]order.Bar{})),
 		app.WithUniverseClient(clients.NewStaticConstituents(nil)),
@@ -87,11 +88,11 @@ func TestBacktest_OrderFillsAgainstCurrentDayBar(t *testing.T) {
 	}
 
 	a := app.NewApp(
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        start,
 			End:          end,
 			StartingCash: 10_000,
-			BarSource:    clients.NewStaticBarSource(bars),
 		}),
 		app.WithMarketClient(clients.NewStaticBars(bars)),
 		app.WithUniverseClient(clients.NewStaticConstituents(nil)),
@@ -120,5 +121,4 @@ func TestBacktest_OrderFillsAgainstCurrentDayBar(t *testing.T) {
 
 type noopConfig struct{}
 
-func (noopConfig) Get(string) (string, error)                  { return "", job.ErrNotFound }
-func (noopConfig) Watch(string, any, any) (job.Watcher, error) { return nil, nil }
+func (noopConfig) Get(string) (string, error) { return "", job.ErrNotFound }

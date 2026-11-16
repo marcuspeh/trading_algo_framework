@@ -17,12 +17,3 @@ type Portfolio interface {
 
 // TradingDayFunc is the signature of an exchange-calendar predicate.
 type TradingDayFunc func(date time.Time) bool
-
-// NYSEWeekdays is the default IsTradingDay predicate. It returns true
-// for any weekday that is not an observed NYSE market holiday.
-//
-// Strategies that need a different exchange calendar should supply their
-// own TradingDayFunc to the App.
-func NYSEWeekdays(date time.Time) bool {
-	return NYSETradingDay(date)
-}

@@ -7,41 +7,12 @@
 package job
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/marcuspeh/trading-framework/order"
 )
-
-// TimeOfDay is a wall-clock time of day used to schedule Jobs.
-type TimeOfDay struct {
-	Hour   int
-	Minute int
-}
-
-// Time is a convenience constructor.
-func Time(hour, minute int) TimeOfDay {
-	return TimeOfDay{Hour: hour, Minute: minute}
-}
-
-func (t TimeOfDay) String() string {
-	return fmt.Sprintf("%02d:%02d", t.Hour, t.Minute)
-}
-
-func (t TimeOfDay) Equal(o TimeOfDay) bool {
-	return t.Hour == o.Hour && t.Minute == o.Minute
-}
-
-func (t TimeOfDay) Validate() error {
-	if t.Hour < 0 || t.Hour > 23 {
-		return fmt.Errorf("invalid hour: %d", t.Hour)
-	}
-	if t.Minute < 0 || t.Minute > 59 {
-		return fmt.Errorf("invalid minute: %d", t.Minute)
-	}
-	return nil
-}
 
 // Mode identifies which stack the strategy is running against.
 type Mode string
@@ -63,8 +34,10 @@ type JobHandler = Handler
 
 // Job is a registered unit of strategy work.
 type Job struct {
-	Name    string
-	Time    TimeOfDay
+	Name string
+	// Time is when the job fires. Use Time for a fixed wall-clock time,
+	// or AtClose/BeforeClose/AtOpen for a slot tied to the session.
+	Time    Slot
 	Handler Handler
 }
 
@@ -86,17 +59,28 @@ type Context interface {
 	PortfolioValue() float64
 	Config() Config
 	Logger() Logger
+
+	// OpenOrders returns the orders resting at the broker. It is how a
+	// strategy inspects the entry orders it left behind.
+	OpenOrders() ([]order.Order, error)
+	// CancelOrder cancels a resting order by its id.
+	CancelOrder(orderID string) error
+	// UpdateOrder changes the limit price of a resting order.
+	UpdateOrder(orderID string, limit float64) error
+}
+
+// OrderBroker is the narrow view of the broker that the Context needs
+// to manage resting orders. It lives in the job package so the context
+// implementation does not have to depend on the execution package.
+type OrderBroker interface {
+	OpenOrders(ctx context.Context) ([]order.Order, error)
+	Cancel(ctx context.Context, orderID string) error
+	Update(ctx context.Context, orderID string, limit float64) error
 }
 
 // Config and Logger interfaces are satisfied by user-provided adapters.
 type Config interface {
 	Get(key string) (string, error)
-	Watch(key string, out any, factory any) (Watcher, error)
-}
-
-type Watcher interface {
-	Value(out any) error
-	Stop()
 }
 
 type Logger interface {
@@ -108,6 +92,12 @@ type Logger interface {
 // ErrNotFound is returned by Context implementations when a resource is
 // not available.
 var ErrNotFound = errors.New("not found")
+
+// ErrInsufficientBars is returned when a symbol has fewer bars than
+// were asked for. The caller gets an error rather than a short
+// history, so an indicator is never silently computed over fewer bars
+// than the strategy asked for.
+var ErrInsufficientBars = errors.New("insufficient bar history")
 
 // ErrInvalidJob is returned when a Job fails validation.
 type ErrInvalidJob struct {

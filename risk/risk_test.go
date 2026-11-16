@@ -75,3 +75,45 @@ func TestReasons_ErrorMessage(t *testing.T) {
 		t.Fatal("expected a message")
 	}
 }
+
+// An order with protective legs but no entry price cannot be a
+// bracket, so it is rejected rather than sent as a plain order.
+func TestBasic_ProtectiveLegsRequireALimitPrice(t *testing.T) {
+	tp, sl := 190.0, 180.0
+	limit := 186.0
+
+	cases := []struct {
+		name  string
+		order order.Order
+		ok    bool
+	}{
+		{
+			name:  "market order with legs",
+			order: order.Order{Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market, TakeProfit: &tp, StopLoss: &sl},
+			ok:    false,
+		},
+		{
+			name:  "limit order with legs and a price",
+			order: order.Order{Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Limit, Limit: &limit, TakeProfit: &tp, StopLoss: &sl},
+			ok:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, err := risk.NewBasic().Validate(nil, []order.Order{tc.order})
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(kept) != 1 {
+					t.Fatalf("kept=%d want 1", len(kept))
+				}
+				return
+			}
+			if len(risk.Rejected(err)) != 1 {
+				t.Fatalf("expected one rejection, got %v", err)
+			}
+		})
+	}
+}

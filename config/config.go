@@ -26,8 +26,8 @@ import (
 // File is a job.Config backed by a key/value file. It is safe for
 // concurrent use.
 //
-// Watch is not supported: the file is read once at construction. Use
-// Reload to pick up changes.
+// The file is read once at construction. Use Reload to pick up
+// changes.
 type File struct {
 	mu     sync.RWMutex
 	values map[string]string
@@ -62,11 +62,6 @@ func (f *File) Get(key string) (string, error) {
 		return "", job.ErrNotFound
 	}
 	return v, nil
-}
-
-// Watch is not supported by this implementation.
-func (f *File) Watch(string, any, any) (job.Watcher, error) {
-	return nil, fmt.Errorf("config: Watch is not supported by the file config")
 }
 
 // Reload re-reads the backing file, replacing the current values.

@@ -74,6 +74,8 @@ func NewBasic() *Basic { return &Basic{} }
 //   - Quantity must be > 0
 //   - Type must be Market or Limit
 //   - Limit orders must carry a positive Limit price
+//   - An order with protective legs must be a limit order: a bracket
+//     has no entry price without one
 func (b *Basic) Validate(_ job.Context, orders []order.Order) ([]order.Order, error) {
 	kept := make([]order.Order, 0, len(orders))
 	var rejected Reasons
@@ -88,6 +90,8 @@ func (b *Basic) Validate(_ job.Context, orders []order.Order) ([]order.Order, er
 			rejected = append(rejected, Reason{Order: o, Reason: "unsupported order type"})
 		case o.Type == order.Limit && (o.Limit == nil || *o.Limit <= 0):
 			rejected = append(rejected, Reason{Order: o, Reason: "limit orders require a positive Limit price"})
+		case (o.TakeProfit != nil || o.StopLoss != nil) && (o.Type != order.Limit || o.Limit == nil):
+			rejected = append(rejected, Reason{Order: o, Reason: "protective legs require a limit order with a price"})
 		default:
 			kept = append(kept, o)
 		}

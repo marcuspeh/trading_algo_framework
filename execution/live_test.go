@@ -12,17 +12,24 @@ import (
 )
 
 type fakeBroker struct {
-	mu          sync.Mutex
-	orders      []execution.MarketOrderRequest
-	limitOrders []execution.LimitOrderRequest
-	positions   []execution.PositionResponse
-	openOrders  []execution.OpenOrderResponse
-	nav         float64
-	failNext    bool
-	cancels     []int
+	mu            sync.Mutex
+	orders        []execution.MarketOrderRequest
+	limitOrders   []execution.LimitOrderRequest
+	bracketOrders []execution.BracketOrderRequest
+	updates       []execution.UpdateOrderRequest
+	positions     []execution.PositionResponse
+	openOrders    []execution.OpenOrderResponse
+	nav           float64
+	failNext      bool
+	cancels       []int
+	keys          []string
 }
 
-func (f *fakeBroker) PlaceMarketOrder(_ context.Context, req execution.MarketOrderRequest, _ string) (*execution.OrderResponse, error) {
+func (f *fakeBroker) Health(_ context.Context) (*execution.HealthResponse, error) {
+	return &execution.HealthResponse{Status: "ok", IBKRConnected: true}, nil
+}
+
+func (f *fakeBroker) PlaceMarketOrder(_ context.Context, req execution.MarketOrderRequest, key string) (*execution.OrderResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failNext {
@@ -30,14 +37,31 @@ func (f *fakeBroker) PlaceMarketOrder(_ context.Context, req execution.MarketOrd
 		return nil, errors.New("broker down")
 	}
 	f.orders = append(f.orders, req)
-	return &execution.OrderResponse{OrderID: len(f.orders)}, nil
+	f.keys = append(f.keys, key)
+	return &execution.OrderResponse{OrderId: len(f.orders)}, nil
 }
 
-func (f *fakeBroker) PlaceLimitOrder(_ context.Context, req execution.LimitOrderRequest, _ string) (*execution.OrderResponse, error) {
+func (f *fakeBroker) PlaceLimitOrder(_ context.Context, req execution.LimitOrderRequest, key string) (*execution.OrderResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.limitOrders = append(f.limitOrders, req)
-	return &execution.OrderResponse{OrderID: 100 + len(f.limitOrders)}, nil
+	f.keys = append(f.keys, key)
+	return &execution.OrderResponse{OrderId: 100 + len(f.limitOrders)}, nil
+}
+
+func (f *fakeBroker) PlaceBracketOrder(_ context.Context, req execution.BracketOrderRequest, key string) (*execution.BracketOrderResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bracketOrders = append(f.bracketOrders, req)
+	f.keys = append(f.keys, key)
+	return &execution.BracketOrderResponse{ParentOrderId: 200 + len(f.bracketOrders)}, nil
+}
+
+func (f *fakeBroker) UpdateOrder(_ context.Context, id int, req execution.UpdateOrderRequest) (*execution.OrderResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates = append(f.updates, req)
+	return &execution.OrderResponse{OrderId: id}, nil
 }
 
 func (f *fakeBroker) CancelOrder(_ context.Context, id int) error {
@@ -71,7 +95,7 @@ func (f *fakeBroker) GetAccountNAV(_ context.Context) (*execution.AccountNAVResp
 
 func TestLiveExecutor_SubmitMarket(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	res, err := exec.Submit(context.Background(), order.Order{
 		Symbol: "AAPL", Side: order.Buy, Quantity: 10, Type: order.Market,
 	})
@@ -88,7 +112,7 @@ func TestLiveExecutor_SubmitMarket(t *testing.T) {
 
 func TestLiveExecutor_SubmitLimit(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	limit := 99.0
 	_, err := exec.Submit(context.Background(), order.Order{
 		Symbol: "AAPL", Side: order.Sell, Quantity: 5, Type: order.Limit, Limit: &limit,
@@ -103,7 +127,7 @@ func TestLiveExecutor_SubmitLimit(t *testing.T) {
 
 func TestLiveExecutor_Cancel(t *testing.T) {
 	b := &fakeBroker{}
-	exec := execution.NewLive(b)
+	exec := execution.NewBroker(b)
 	if err := exec.Cancel(context.Background(), "42"); err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +142,8 @@ func TestLiveExecutor_Cancel(t *testing.T) {
 func TestReconciler_OverwritesMirrorWithBrokerTruth(t *testing.T) {
 	b := &fakeBroker{
 		positions: []execution.PositionResponse{
-			{ConID: 1, Symbol: "AAPL", Quantity: 10, AverageCost: 100},
-			{ConID: 2, Symbol: "MSFT", Quantity: -3, AverageCost: 250},
+			{ConId: 1, Symbol: "AAPL", Quantity: 10, AverageCost: 100},
+			{ConId: 2, Symbol: "MSFT", Quantity: -3, AverageCost: 250},
 		},
 		nav: 5000,
 	}

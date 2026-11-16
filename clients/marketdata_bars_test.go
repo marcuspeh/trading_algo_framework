@@ -9,6 +9,7 @@ import (
 	"time"
 
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/clients"
 )
 
@@ -73,7 +74,7 @@ func TestBars_LookbackReturnsFullCount(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 	asOf := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	for _, lb := range []int{1, 3, 5, 8, 20} {
@@ -98,7 +99,7 @@ func TestBars_LookbackOneOnMonday(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 	for _, d := range []string{"2024-01-08", "2024-01-15", "2024-01-22"} {
 		asOf, _ := time.Parse("2006-01-02", d)
 		bars, err := m.Bars(context.Background(), "AAPL", 1, asOf)
@@ -120,7 +121,7 @@ func TestBars_TimestampAnchoredOnNYSE(t *testing.T) {
 	srv := httptest.NewServer(svc.handler())
 	defer srv.Close()
 
-	m := clients.NewMarket(marketdata.NewClient(srv.URL))
+	m := clients.NewMarket(marketdata.NewClient(srv.URL), published.New())
 	asOf := time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC)
 	bars, err := m.Bars(context.Background(), "AAPL", 1, asOf)
 	if err != nil {

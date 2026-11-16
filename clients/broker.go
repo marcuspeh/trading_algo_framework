@@ -10,152 +10,123 @@
 package clients
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+	"time"
 
+	ibkrproxy "github.com/marcuspeh/ibkr-proxy/sdk/go"
 	"github.com/marcuspeh/trading-framework/broker"
 )
 
-// Broker HTTP client and request/response types.
-//
-// The request/response types live in the broker package so that this
-// client and the framework's execution package speak exactly the same
-// types. *BrokerClient therefore satisfies broker.Client and can be
-// passed directly to app.WithLive.
-
+// BrokerConfig describes where the broker service lives.
 type BrokerConfig struct {
 	BaseURL string
 	Port    int
+
+	// Timeout bounds every call to the broker. Zero means
+	// DefaultBrokerTimeout.
+	Timeout time.Duration
 }
 
-// BrokerClient implements broker.Client over HTTP.
-type BrokerClient struct {
-	baseURL string
-	client  *http.Client
+// DefaultBrokerTimeout is the deadline applied to a broker call when
+// none is configured.
+const DefaultBrokerTimeout = 30 * time.Second
+
+// Broker is a live broker client.
+//
+// It wraps the ibkr-proxy SDK's client and adds a deadline to every
+// call. The SDK sets no timeout on its HTTP client, so without this a
+// stalled broker would hang the trading session indefinitely.
+type Broker struct {
+	client  broker.Client
+	timeout time.Duration
 }
 
-// Compile-time proof that the HTTP client satisfies the framework's
-// broker interface.
-var _ broker.Client = (*BrokerClient)(nil)
+// Compile-time proof that the wrapper satisfies the framework's broker
+// interface.
+var _ broker.Client = (*Broker)(nil)
 
-func NewBrokerClient(ctx context.Context, config BrokerConfig) *BrokerClient {
-	return &BrokerClient{
-		baseURL: fmt.Sprintf("%s:%d", config.BaseURL, config.Port),
-		client:  &http.Client{},
+// NewBroker returns a live broker client for the given configuration.
+func NewBroker(ctx context.Context, config BrokerConfig) *Broker {
+	timeout := config.Timeout
+	if timeout <= 0 {
+		timeout = DefaultBrokerTimeout
+	}
+	return &Broker{
+		client:  ibkrproxy.NewBrokerClient(ctx, brokerURL(config)),
+		timeout: timeout,
 	}
 }
 
-func (c *BrokerClient) doRequest(ctx context.Context, method, path string, body interface{}, response interface{}, idempotencyKey string) error {
-	var bodyReader io.Reader
-	if body != nil {
-		jsonBody, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonBody)
+// NewBrokerWithClient wraps an existing broker client with the
+// framework's deadline handling. It is how a test supplies a fake.
+func NewBrokerWithClient(c broker.Client, timeout time.Duration) *Broker {
+	if timeout <= 0 {
+		timeout = DefaultBrokerTimeout
 	}
-
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if idempotencyKey != "" {
-		req.Header.Set("X-Idempotency-Key", idempotencyKey)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	if response != nil {
-		if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
-		}
-	}
-
-	return nil
+	return &Broker{client: c, timeout: timeout}
 }
 
-func (c *BrokerClient) PlaceLimitOrder(ctx context.Context, req broker.LimitOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
-	var res broker.OrderResponse
-	if err := c.doRequest(ctx, "POST", "/orders/limit", req, &res, idempotencyKey); err != nil {
-		return nil, err
-	}
-	return &res, nil
+// brokerURL builds the base URL the SDK expects.
+func brokerURL(config BrokerConfig) string {
+	return fmt.Sprintf("%s:%d", config.BaseURL, config.Port)
 }
 
-func (c *BrokerClient) PlaceMarketOrder(ctx context.Context, req broker.MarketOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
-	var res broker.OrderResponse
-	if err := c.doRequest(ctx, "POST", "/orders/market", req, &res, idempotencyKey); err != nil {
-		return nil, err
-	}
-	return &res, nil
+// deadline derives a context bounded by the configured timeout.
+func (b *Broker) deadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, b.timeout)
 }
 
-func (c *BrokerClient) PlaceBracketOrder(ctx context.Context, req broker.BracketOrderRequest, idempotencyKey string) (*broker.BracketOrderResponse, error) {
-	var res broker.BracketOrderResponse
-	if err := c.doRequest(ctx, "POST", "/orders/bracket", req, &res, idempotencyKey); err != nil {
-		return nil, err
-	}
-	return &res, nil
+func (b *Broker) Health(ctx context.Context) (*broker.HealthResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.Health(ctx)
 }
 
-func (c *BrokerClient) CancelOrder(ctx context.Context, orderID int) error {
-	return c.doRequest(ctx, "DELETE", fmt.Sprintf("/orders/%d", orderID), nil, nil, "")
+func (b *Broker) PlaceMarketOrder(ctx context.Context, req broker.MarketOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.PlaceMarketOrder(ctx, req, idempotencyKey)
 }
 
-func (c *BrokerClient) UpdateOrder(ctx context.Context, orderID int, req broker.UpdateOrderRequest) (*broker.OrderResponse, error) {
-	var res broker.OrderResponse
-	if err := c.doRequest(ctx, "PUT", fmt.Sprintf("/orders/%d", orderID), req, &res, ""); err != nil {
-		return nil, err
-	}
-	return &res, nil
+func (b *Broker) PlaceLimitOrder(ctx context.Context, req broker.LimitOrderRequest, idempotencyKey string) (*broker.OrderResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.PlaceLimitOrder(ctx, req, idempotencyKey)
 }
 
-func (c *BrokerClient) GetPositions(ctx context.Context) ([]broker.PositionResponse, error) {
-	var res []broker.PositionResponse
-	if err := c.doRequest(ctx, "GET", "/positions", nil, &res, ""); err != nil {
-		return nil, err
-	}
-	return res, nil
+func (b *Broker) PlaceBracketOrder(ctx context.Context, req broker.BracketOrderRequest, idempotencyKey string) (*broker.BracketOrderResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.PlaceBracketOrder(ctx, req, idempotencyKey)
 }
 
-func (c *BrokerClient) GetAccountNAV(ctx context.Context) (*broker.AccountNAVResponse, error) {
-	var res broker.AccountNAVResponse
-	if err := c.doRequest(ctx, "GET", "/account/nav", nil, &res, ""); err != nil {
-		return nil, err
-	}
-	return &res, nil
+func (b *Broker) UpdateOrder(ctx context.Context, orderID int, req broker.UpdateOrderRequest) (*broker.OrderResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.UpdateOrder(ctx, orderID, req)
 }
 
-func (c *BrokerClient) GetOpenOrders(ctx context.Context) ([]broker.OpenOrderResponse, error) {
-	var res []broker.OpenOrderResponse
-	if err := c.doRequest(ctx, "GET", "/orders/open", nil, &res, ""); err != nil {
-		return nil, err
-	}
-	return res, nil
+func (b *Broker) CancelOrder(ctx context.Context, orderID int) error {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.CancelOrder(ctx, orderID)
 }
 
-func (c *BrokerClient) GetOHLC(ctx context.Context, symbols []string) ([]broker.OHLCResponse, error) {
-	var res []broker.OHLCResponse
-	symbolsStr := strings.Join(symbols, ",")
-	path := fmt.Sprintf("/ohlc?symbols=%s", symbolsStr)
-	if err := c.doRequest(ctx, "GET", path, nil, &res, ""); err != nil {
-		return nil, err
-	}
-	return res, nil
+func (b *Broker) GetPositions(ctx context.Context) ([]broker.PositionResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.GetPositions(ctx)
+}
+
+func (b *Broker) GetOpenOrders(ctx context.Context) ([]broker.OpenOrderResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.GetOpenOrders(ctx)
+}
+
+func (b *Broker) GetAccountNAV(ctx context.Context) (*broker.AccountNAVResponse, error) {
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+	return b.client.GetAccountNAV(ctx)
 }

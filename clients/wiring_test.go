@@ -5,17 +5,22 @@ import (
 	"testing"
 	"time"
 
+	ibkrproxy "github.com/marcuspeh/ibkr-proxy/sdk/go"
 	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/broker"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
 
-// The bundled HTTP broker client must satisfy the framework's broker
+// The ibkr-proxy SDK's client must satisfy the framework's broker
 // interface, so it can be handed straight to app.WithLive.
-var _ broker.Client = (*clients.BrokerClient)(nil)
+var _ broker.Client = (*ibkrproxy.BrokerClient)(nil)
+
+// The framework's live client wraps it and must satisfy it too.
+var _ broker.Client = (*clients.Broker)(nil)
 
 // TestLiveWiringCompiles mirrors the live wiring documented in the
 // README. It does not talk to any server; it only proves the types line
@@ -23,11 +28,11 @@ var _ broker.Client = (*clients.BrokerClient)(nil)
 func TestLiveWiringCompiles(t *testing.T) {
 	ctx := context.Background()
 
-	brokerClient := clients.NewBrokerClient(ctx, clients.BrokerConfig{
+	brokerClient := clients.NewBroker(ctx, clients.BrokerConfig{
 		BaseURL: "http://localhost",
-		Port:    5000,
+		Port:    5001,
 	})
-	marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"))
+	marketClient := clients.NewMarket(marketdata.NewClient("http://localhost:8001"), published.New())
 	universeClient := clients.NewConstituents(marketdata.NewClient("http://localhost:8001"))
 
 	a := app.NewApp(
@@ -47,5 +52,4 @@ func TestLiveWiringCompiles(t *testing.T) {
 
 type stubConfig struct{}
 
-func (stubConfig) Get(string) (string, error)                  { return "", job.ErrNotFound }
-func (stubConfig) Watch(string, any, any) (job.Watcher, error) { return nil, nil }
+func (stubConfig) Get(string) (string, error) { return "", job.ErrNotFound }

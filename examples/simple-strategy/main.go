@@ -23,6 +23,7 @@ import (
 	"github.com/marcuspeh/trading-framework/app"
 	"github.com/marcuspeh/trading-framework/clients"
 	"github.com/marcuspeh/trading-framework/config"
+	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -111,8 +112,14 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 	return nil, nil
 }
 
+// fakeBars builds a few months of daily bars, ending after the
+// backtest window.
+//
+// The history starts well before the backtest does: a job at the close
+// of the first day reads that day's bar, and a strategy that asks for
+// a moving average needs the days before it.
 func fakeBars() map[string][]order.Bar {
-	start := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2023, 10, 2, 0, 0, 0, 0, time.UTC)
 	out := map[string][]order.Bar{}
 	prices := map[string]float64{
 		"AAPL": 180.0,
@@ -120,8 +127,8 @@ func fakeBars() map[string][]order.Bar {
 		"NVDA": 480.0,
 	}
 	for sym, p := range prices {
-		bars := make([]order.Bar, 0, 10)
-		for d := 0; d < 10; d++ {
+		bars := make([]order.Bar, 0, 100)
+		for d := 0; d < 100; d++ {
 			date := start.AddDate(0, 0, d)
 			if date.Weekday() == time.Saturday || date.Weekday() == time.Sunday {
 				continue
@@ -147,8 +154,9 @@ func fakeBars() map[string][]order.Bar {
 
 func main() {
 	bars := fakeBars()
+	// The same in-memory bars serve the strategy and the fill model, so
+	// the two can never see different prices.
 	market := clients.NewStaticBars(bars)
-	barSrc := clients.NewStaticBarSource(bars)
 
 	constituentsByDate := map[string]map[string][]string{
 		"SPY": {
@@ -163,13 +171,21 @@ func main() {
 	})
 
 	a := app.NewApp(
+		// The exchange calendar. A live strategy asks the
+		// market-data-service for it:
+		//
+		//   calendar.NewService(marketdata.NewClient("http://localhost:8001"))
+		//
+		// This example runs on in-memory data, so it uses the
+		// published NYSE calendars instead of a running service.
+		app.WithCalendarProvider(published.New()),
 		app.WithBacktest(app.BacktestConfig{
 			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
 			StartingCash: 10_000,
-			BarSource:    barSrc,
-			SlippageBps:  5,
-			Commission:   1,
+
+			SlippageBps: 5,
+			Commission:  1,
 		}),
 		app.WithMarketClient(market),
 		app.WithUniverseClient(constituents),
