@@ -289,6 +289,29 @@ A live run checks the broker is connected before it starts, and refreshes
 the portfolio from the broker before every job - so a job that asks what it
 already holds sees what the broker says it holds.
 
+#### Fill reports
+
+A live broker fills asynchronously: the order is acknowledged when it is
+submitted, and the fill arrives later, on a channel of its own. The
+ibkr-proxy pushes those fills to a webhook. The framework can listen for
+them and log each fill as it happens:
+
+```go
+a := app.NewApp(
+    app.WithLive(app.LiveConfig{
+        Broker:       brokerClient,
+        FillWebhook: "127.0.0.1:8000",
+    }),
+    ...
+)
+```
+
+The proxy's `WEBHOOK_URL` has to point at it: the proxy posts to
+`{WEBHOOK_URL}/fills`, and its default webhook URL is
+`http://127.0.0.1:8000/webhook`. A fill is logged against the order that
+filled when the framework placed it; a fill for an order it did not place -
+a manual trade, or another client's - is logged as a warning.
+
 ### Orders
 
 An order may carry protective legs and a time in force:
@@ -416,6 +439,7 @@ trading-framework/
 ├── context/     # Context implementation
 ├── examples/    # simple-strategy
 ├── execution/   # Executor + order translation + reconciler
+├── fills/       # live fill webhook receiver
 ├── job/         # Job, Slot, Handler, Context
 ├── live/        # live engine loop
 ├── logging/     # text logger
@@ -436,6 +460,9 @@ trading-framework/
 - Live positions are refreshed from the broker before each job, so a
   position that appears between two jobs is not visible until the next
   one.
+- A live fill is named after the order the framework placed. A bracket's
+  exit legs are reported by the reference their entry carried, so they
+  are named only when the strategy gave its orders an id.
 - Live cash is derived from the net asset value and the position marks,
   which are daily closes. It drifts from the broker's own cash during a
   session, and it is unknown rather than wrong when a position has no

@@ -11,6 +11,7 @@ import (
 	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/fills"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/pipeline"
@@ -31,6 +32,13 @@ type Engine struct {
 	risk       risk.Manager
 	logger     job.Logger
 	reconciler *execution.Reconciler
+	fills      *fills.Registry
+
+	// fillAddr is the address the broker's fill reports arrive on, and
+	// fillServer is the listener that takes them. Both are empty when
+	// the run does not listen for fills.
+	fillAddr   string
+	fillServer *fills.Server
 }
 
 // Config configures a live Engine.
@@ -48,6 +56,18 @@ type Config struct {
 	// Calendar is the exchange calendar. It is required when no
 	// Session is supplied: the session's boundaries come from it.
 	Calendar calendar.Provider
+
+	// FillWebhook is the address the broker's fill reports arrive on,
+	// e.g. "127.0.0.1:8000". It is empty when the run does not listen
+	// for them.
+	//
+	// The broker's webhook URL has to point at it: the proxy posts to
+	// {WEBHOOK_URL}/fills.
+	FillWebhook string
+
+	// Fills names the orders the executor placed, so a fill report can
+	// be logged against the order that filled.
+	Fills *fills.Registry
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -102,6 +122,8 @@ func New(cfg Config) (*Engine, error) {
 		session:   cfg.Session,
 		risk:      cfg.Risk,
 		logger:    cfg.Logger,
+		fills:     cfg.Fills,
+		fillAddr:  cfg.FillWebhook,
 		reconciler: execution.NewReconciler(cfg.Broker, cfg.Portfolio, cfg.Logger).
 			WithPrices(cfg.Market, cfg.Session),
 	}, nil
@@ -110,6 +132,17 @@ func New(cfg Config) (*Engine, error) {
 func (e *Engine) RegisterJob(j job.Job) error { return e.scheduler.Register(j) }
 func (e *Engine) Clock() clock.Clock          { return e.clock }
 func (e *Engine) Portfolio() *portfolio.Live  { return e.portfolio }
+
+// FillAddr returns the address the fill listener is on.
+//
+// It is empty until the run starts the listener, and it is the address
+// the broker's webhook URL has to point at.
+func (e *Engine) FillAddr() string {
+	if e.fillServer == nil {
+		return ""
+	}
+	return e.fillServer.Addr()
+}
 func (e *Engine) Reconciler() *execution.Reconciler {
 	return e.reconciler
 }
@@ -124,6 +157,10 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 	if err := e.checkHealth(parent); err != nil {
 		return err
 	}
+	if err := e.startFillWebhook(); err != nil {
+		return err
+	}
+	defer e.stopFillWebhook()
 	if _, err := e.reconciler.Reconcile(parent); err != nil {
 		return fmt.Errorf("live: reconcile: %w", err)
 	}
@@ -141,6 +178,33 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 
 	handler := pipeline.Handler(e.risk, e.executor, e.logger)
 	return e.scheduler.Run(parent, jc, handler)
+}
+
+// startFillWebhook begins listening for the broker's fill reports.
+//
+// A listener that cannot bind fails the run: a run that cannot hear
+// its fills would log nothing about them and look healthy.
+func (e *Engine) startFillWebhook() error {
+	if e.fills == nil || e.fillAddr == "" {
+		return nil
+	}
+	srv := fills.NewServer(e.fillAddr, e.fills, e.logger)
+	if err := srv.Start(); err != nil {
+		return err
+	}
+	e.fillServer = srv
+	e.logger.Info("listening for fill webhooks", "addr", e.fillAddr)
+	return nil
+}
+
+// stopFillWebhook shuts the fill listener down.
+func (e *Engine) stopFillWebhook() {
+	if e.fillServer == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = e.fillServer.Stop(ctx)
 }
 
 // checkHealth fails fast when the broker is not connected.

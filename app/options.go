@@ -16,6 +16,7 @@ import (
 	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/fills"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
 	"github.com/marcuspeh/trading-framework/logging"
@@ -69,6 +70,10 @@ type App struct {
 
 	// btBroker is the simulated broker used by the backtest stack.
 	btBroker *mock.Mock
+
+	// fills remembers the orders the live executor places, so the
+	// fills the broker reports later can be named.
+	fills *fills.Registry
 
 	jobs   []job.Job
 	warmup []warmupEntry
@@ -197,6 +202,15 @@ func WithBacktest(cfg BacktestConfig) Option {
 // (RealClock, RealScheduler, LiveExecutor, LivePortfolio, Reconciler).
 type LiveConfig struct {
 	Broker execution.Client
+
+	// FillWebhook is the address the broker's fill reports arrive on,
+	// e.g. "127.0.0.1:8000". It is empty when the run does not listen
+	// for them.
+	//
+	// The broker's webhook URL has to point at it: the proxy posts to
+	// {WEBHOOK_URL}/fills, and the proxy's default webhook URL is
+	// http://127.0.0.1:8000/webhook.
+	FillWebhook string
 }
 
 // WithLive configures the App for live mode and wires up the live stack.

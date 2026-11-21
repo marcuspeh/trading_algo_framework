@@ -12,6 +12,7 @@ import (
 	"github.com/marcuspeh/trading-framework/clock"
 	tfcontext "github.com/marcuspeh/trading-framework/context"
 	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/fills"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
 	"github.com/marcuspeh/trading-framework/market"
@@ -112,6 +113,7 @@ func (a *App) resolveBacktest() error {
 		SlippageBps:        cfg.SlippageBps,
 		Commission:         cfg.Commission,
 		CommissionPerShare: cfg.CommissionPerShare,
+		Logger:             a.logger,
 	})
 	a.btBroker = mockBroker
 	a.executor = execution.NewBroker(mockBroker)
@@ -139,7 +141,11 @@ func (a *App) resolveLive() error {
 	a.clock = clock.NewReal()
 	a.session = clock.NewSession(a.clock, a.calendar)
 	a.portfolio = portfolio.NewLive()
-	a.executor = execution.NewBroker(cfg.Broker)
+
+	// The registry remembers the orders the executor places, so the
+	// fills the broker reports later can be named.
+	a.fills = fills.NewRegistry()
+	a.executor = execution.NewBroker(cfg.Broker).WithFills(a.fills)
 	if a.risk == nil {
 		a.risk = risk.NewBasic()
 	}
@@ -302,6 +308,8 @@ func (a *App) runLive(parent context.Context) error {
 		Session:      a.session,
 		Market:       a.market,
 		IsTradingDay: a.tradingDay,
+		Fills:        a.fills,
+		FillWebhook:  a.liveCfg.FillWebhook,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live engine: %w", err)

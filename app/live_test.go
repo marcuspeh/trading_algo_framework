@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -131,6 +133,72 @@ func TestApp_LiveCashIsDerived(t *testing.T) {
 	if got := mirror.Value(); got != 100_000 {
 		t.Errorf("portfolio value=%f want 100000 (the broker's NAV)", got)
 	}
+}
+
+// The live stack listens for the fills the broker reports, so a fill is
+// logged when it happens rather than when the order was submitted.
+func TestApp_LiveListensForFills(t *testing.T) {
+	b := &liveFakeBroker{nav: 100_000}
+	log := &captureLogger{}
+
+	a := NewApp(
+		WithCalendarProvider(published.New()),
+		WithLive(LiveConfig{Broker: b, FillWebhook: "127.0.0.1:0"}),
+		WithMarketClient(clients.NewStaticBars(map[string][]order.Bar{})),
+		WithUniverseClient(liveFakeUniverse{}),
+		WithConfigClient(liveFakeConfig{}),
+		WithLogger(log),
+	)
+	if err := a.RegisterJob(job.Job{
+		Name: "noop", Time: job.Time(16, 0),
+		Handler: func(job.Context, time.Time) ([]order.Order, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.RunContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, line := range log.all() {
+		if strings.Contains(line, "listening for fill webhooks") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("the run did not listen for fills: %v", log.all())
+	}
+}
+
+// captureLogger keeps the lines the app logged.
+type captureLogger struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *captureLogger) Info(msg string, fields ...any)  { c.add(msg, fields) }
+func (c *captureLogger) Warn(msg string, fields ...any)  { c.add(msg, fields) }
+func (c *captureLogger) Error(msg string, fields ...any) { c.add(msg, fields) }
+
+func (c *captureLogger) add(msg string, fields []any) {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(fields); i += 2 {
+		fmt.Fprintf(&b, " %v=%v", fields[i], fields[i+1])
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, b.String())
+}
+
+func (c *captureLogger) all() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.lines...)
 }
 
 // recentSessions returns the last ten sessions, most recent first.
