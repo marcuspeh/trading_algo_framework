@@ -67,7 +67,9 @@ func main() {
 }
 ```
 
-A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy):
+A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy). It trades the SPY's
+constituents with a moving-average crossover and reads its prices from the market-data-service, so the
+service has to be running:
 
 ```sh
 go run ./examples/simple-strategy
