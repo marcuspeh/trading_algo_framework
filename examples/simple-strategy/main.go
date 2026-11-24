@@ -2,7 +2,7 @@
 // the trading-framework package.
 //
 // It registers two Jobs (refresh-universe at 09:00, rebalance at 16:00)
-// and runs a backtest over the last three weeks.
+// and runs a backtest over October 2026.
 //
 // Everything the strategy reads comes from the market-data-service: the
 // SPY's constituents, the daily bars and the exchange calendar. The
@@ -360,16 +360,14 @@ func marketDataURL() string {
 	return os.Getenv("MARKET_DATA_URL")
 }
 
-// backtestWindow is the window the example runs over: the three weeks
-// before yesterday.
+// backtestWindow is the window the example runs over: October 2026.
 //
 // The strategy needs 200 sessions of history before it can read a
 // crossover, so the window is where the service's history is, not
-// where the strategy's is.
+// where the strategy's is. Change the dates to move it.
 func backtestWindow() (start, end time.Time) {
-	yesterday := time.Now().AddDate(0, 0, -1)
-	end = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, clock.NYSE)
-	start = end.AddDate(0, 0, -20)
+	start = time.Date(2024, 1, 1, 0, 0, 0, 0, clock.NYSE)
+	end = time.Date(2025, 12, 31, 0, 0, 0, 0, clock.NYSE)
 	return start, end
 }
 
