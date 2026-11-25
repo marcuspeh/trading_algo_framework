@@ -402,14 +402,14 @@ func marketDataURL() string {
 	return os.Getenv("MARKET_DATA_URL")
 }
 
-// backtestWindow is the window the example runs over: October 2026.
+// backtestWindow is the window the example runs over: January 2025.
 //
 // The strategy needs 200 sessions of history before it can read a
 // crossover, so the window is where the service's history is, not
 // where the strategy's is. Change the dates to move it.
 func backtestWindow() (start, end time.Time) {
-	start = time.Date(2024, 1, 1, 0, 0, 0, 0, clock.NYSE)
-	end = time.Date(2025, 12, 31, 0, 0, 0, 0, clock.NYSE)
+	start = time.Date(2025, 1, 1, 0, 0, 0, 0, clock.NYSE)
+	end = time.Date(2025, 2, 1, 0, 0, 0, 0, clock.NYSE)
 	return start, end
 }
 
