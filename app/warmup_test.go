@@ -53,7 +53,7 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 	if err := a.RegisterJob(job.Job{
 		Name: "j", Time: job.Time(16, 0),
 		Handler: func(ctx job.Context, _ time.Time) ([]order.Order, error) {
-			_, _ = ctx.Bars("AAPL", 5)
+			_, _ = ctx.Bars([]string{"AAPL"}, 5)
 			return nil, nil
 		},
 	}); err != nil {
@@ -102,7 +102,7 @@ func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
 
 	read := func(name string) job.Handler {
 		return func(ctx job.Context, _ time.Time) ([]order.Order, error) {
-			_, _ = ctx.Bars("AAPL", 5)
+			_, _ = ctx.Bars([]string{"AAPL"}, 5)
 			return nil, nil
 		}
 	}

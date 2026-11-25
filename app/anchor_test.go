@@ -55,11 +55,11 @@ func TestApp_JobSeesTheSessionItShould(t *testing.T) {
 				// Only the first day is of interest here.
 				return nil, nil
 			}
-			got, err := ctx.Bars("AAPL", 1)
+			bars, err := ctx.Bars([]string{"AAPL"}, 1)
 			if err != nil {
 				return nil, err
 			}
-			seen[name] = sessionOf(got)
+			seen[name] = sessionOf(bars["AAPL"])
 			return nil, nil
 		}
 	}

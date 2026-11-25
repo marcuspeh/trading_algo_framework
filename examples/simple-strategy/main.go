@@ -35,7 +35,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"sync"
 	"time"
 
 	indicators "github.com/marcuspeh/indicators-go"
@@ -64,13 +63,6 @@ const (
 	// maxPositions is the number of positions the strategy may hold at
 	// once. The config client can override it.
 	maxPositions = 10
-
-	// barWorkers is how many names' bars are fetched at once.
-	//
-	// The market-data-service takes a couple of seconds to answer a
-	// bar request and the universe runs to hundreds of names, so
-	// fetching them one at a time makes a backtest take days.
-	barWorkers = 24
 )
 
 // setup is what the strategy knows about one symbol on one day.
@@ -153,7 +145,27 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 	}
 
 	// What the crossover says about every name in the universe.
-	setups, noHistory := fetchSetups(ctx, syms)
+	//
+	// The framework fetches the bars for the whole universe at once,
+	// so the names it could not serve are simply the ones missing
+	// from the map.
+	bars, err := ctx.Bars(syms, slowPeriod)
+	if err != nil {
+		return nil, err
+	}
+	setups := make([]setup, 0, len(bars))
+	var noHistory []string
+	for _, sym := range syms {
+		b, ok := bars[sym]
+		if !ok {
+			// A name without enough history has no crossover yet. It
+			// is skipped, not fatal: the universe is wider than the
+			// history the service has collected.
+			noHistory = append(noHistory, sym)
+			continue
+		}
+		setups = append(setups, computeSetup(sym, b))
+	}
 	if len(noHistory) > 0 {
 		ctx.Logger().Warn("symbols skipped",
 			"count", len(noHistory),
@@ -302,52 +314,6 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 	)
 
 	return orders, nil
-}
-
-// fetchSetups reads the crossover and the volatility for every symbol.
-//
-// The bars are fetched concurrently: the service takes a couple of
-// seconds to answer a request, and the universe has hundreds of names,
-// so one at a time would make a backtest take days. The results keep
-// the order of syms, so a run comes out the same however the requests
-// were scheduled.
-//
-// A name without enough history has no crossover yet. It is skipped,
-// not fatal: the universe is wider than the history the service has
-// collected.
-func fetchSetups(ctx job.Context, syms []string) ([]setup, []string) {
-	setups := make([]setup, len(syms))
-	fetched := make([]bool, len(syms))
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, barWorkers)
-	for i, sym := range syms {
-		wg.Add(1)
-		go func(i int, sym string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			bars, err := ctx.Bars(sym, slowPeriod)
-			if err != nil {
-				return
-			}
-			setups[i] = computeSetup(sym, bars)
-			fetched[i] = true
-		}(i, sym)
-	}
-	wg.Wait()
-
-	kept := make([]setup, 0, len(syms))
-	var noHistory []string
-	for i, sym := range syms {
-		if fetched[i] {
-			kept = append(kept, setups[i])
-			continue
-		}
-		noHistory = append(noHistory, sym)
-	}
-	return kept, noHistory
 }
 
 // names returns up to five names, for a log line that names a handful

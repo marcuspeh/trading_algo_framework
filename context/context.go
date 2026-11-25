@@ -63,6 +63,13 @@ type barCacheEntry struct {
 	bars []order.Bar
 }
 
+// barWorkers is how many symbols' bars are fetched at once.
+//
+// The market-data-service takes seconds to answer a request and a
+// universe runs to hundreds of names, so fetching them one at a time
+// makes a backtest take days.
+const barWorkers = 24
+
 // New constructs a Context. All dependencies are required except
 // IsTradingDay (defaults to the exchange calendar's trading days) and
 // Mode (defaults to
@@ -100,27 +107,79 @@ func (c *ctx) Mode() job.Mode {
 	return c.mode
 }
 
-// Bars returns the most recent bars for a symbol, ending on the
-// session the clock is anchored to.
+// Bars returns the most recent bars for each of the symbols, ending on
+// the session the clock is anchored to.
 //
 // The anchor is the most recent session whose close has passed, so a
 // job that fires before the close reads the previous session and a job
 // that fires at or after the close reads the current one. A strategy
 // can never see a bar that had not been printed yet.
 //
-// A request for more bars than the service has returns
-// job.ErrInsufficientBars rather than a short history, so an
-// indicator is never silently computed over fewer bars than asked for.
-func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
+// The symbols are fetched concurrently, a few at a time. A strategy
+// that reads the history of a whole universe would otherwise pay for
+// it one name at a time, and the market-data-service takes seconds to
+// answer a request.
+//
+// A symbol with less history than was asked for - or with none at all
+// - is left out of the map, so an indicator is never silently computed
+// over fewer bars than asked for. The error is for a request the
+// framework could not make at all: an empty list of symbols, a
+// lookback that is not positive, or a blank symbol.
+func (c *ctx) Bars(symbols []string, lookback int) (map[string][]order.Bar, error) {
+	if len(symbols) == 0 {
+		return nil, errInvalid("symbols are required")
+	}
 	if lookback <= 0 {
 		return nil, errInvalid("lookback must be > 0")
 	}
-	if symbol == "" {
-		return nil, errInvalid("symbol is required")
+	for _, symbol := range symbols {
+		if symbol == "" {
+			return nil, errInvalid("symbol is required")
+		}
 	}
 
 	asOf := c.session.Anchor(c.clock.Now())
 
+	out := make(map[string][]order.Bar, len(symbols))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, barWorkers)
+
+	// A symbol asked for twice is fetched once.
+	seen := make(map[string]bool, len(symbols))
+	for _, symbol := range symbols {
+		if seen[symbol] {
+			continue
+		}
+		seen[symbol] = true
+
+		wg.Add(1)
+		go func(symbol string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			bars, err := c.barsFor(symbol, lookback, asOf)
+			if err != nil {
+				// The symbol is left out of the map.
+				return
+			}
+			mu.Lock()
+			out[symbol] = bars
+			mu.Unlock()
+		}(symbol)
+	}
+	wg.Wait()
+
+	return out, nil
+}
+
+// barsFor returns the most recent bars for one symbol.
+//
+// A symbol with a shorter history than was asked for returns
+// job.ErrInsufficientBars rather than a short history, so an indicator
+// is never silently computed over fewer bars than asked for.
+func (c *ctx) barsFor(symbol string, lookback int, asOf time.Time) ([]order.Bar, error) {
 	c.barCacheMu.Lock()
 	cached, ok := c.barCache[symbol][sessionKey(asOf)]
 	c.barCacheMu.Unlock()

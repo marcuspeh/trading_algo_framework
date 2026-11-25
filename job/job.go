@@ -50,7 +50,16 @@ type Context interface {
 	// mode. The framework guarantees both stacks behave identically, so
 	// strategies rarely need it.
 	Mode() Mode
-	Bars(symbol string, lookback int) ([]order.Bar, error)
+	// Bars returns the most recent bars for each of the symbols.
+	//
+	// The symbols are fetched concurrently, so a strategy that reads
+	// the history of a whole universe does not pay for it one name at
+	// a time.
+	//
+	// A symbol the market could not serve - no history at all, or less
+	// than the lookback asked for - is left out of the map. The error
+	// is for a request the framework could not make at all.
+	Bars(symbols []string, lookback int) (map[string][]order.Bar, error)
 	Constituents(etf string) ([]string, error)
 	IsTradingDay(date time.Time) bool
 	Position(symbol string) order.Position

@@ -255,28 +255,37 @@ func (a *App) runWarmup(ctx job.Context) error {
 	copy(entries, a.warmup)
 	a.mu.Unlock()
 
+	// The entries are fetched in batches of one lookback, so the
+	// framework can read them concurrently.
+	byLookback := map[int][]string{}
 	for _, w := range entries {
-		bars, err := ctx.Bars(w.Symbol, w.Lookback)
+		byLookback[w.Lookback] = append(byLookback[w.Lookback], w.Symbol)
+	}
+
+	for lookback, symbols := range byLookback {
+		bars, err := ctx.Bars(symbols, lookback)
 		if err != nil {
-			// A symbol with a short history, or none at all, is
-			// worth warning about but not worth abandoning the
-			// backtest over: the strategy will hit the same
-			// shortfall when it asks for the history itself.
-			if errors.Is(err, job.ErrInsufficientBars) || errors.Is(err, job.ErrNotFound) {
+			return fmt.Errorf("warmup: %w", err)
+		}
+		for _, symbol := range symbols {
+			got, ok := bars[symbol]
+			if !ok {
+				// A symbol with a short history, or none at all, is
+				// worth warning about but not worth abandoning the
+				// backtest over: the strategy will hit the same
+				// shortfall when it asks for the history itself.
 				a.logger.Warn("warmup has a short history",
-					"symbol", w.Symbol,
-					"lookback", w.Lookback,
-					"err", err.Error(),
+					"symbol", symbol,
+					"lookback", lookback,
 				)
 				continue
 			}
-			return fmt.Errorf("warmup %s: %w", w.Symbol, err)
+			a.logger.Info("warmup complete",
+				"symbol", symbol,
+				"lookback", lookback,
+				"bars", len(got),
+			)
 		}
-		a.logger.Info("warmup complete",
-			"symbol", w.Symbol,
-			"lookback", w.Lookback,
-			"bars", len(bars),
-		)
 	}
 	return nil
 }
