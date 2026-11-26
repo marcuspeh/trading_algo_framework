@@ -14,3 +14,6 @@ go.work.sum
 # Local logs / outputs
 *.log
 logs/
+
+# Tear sheets the framework writes after every run
+tearsheets/

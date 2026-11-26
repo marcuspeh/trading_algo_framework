@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/marcuspeh/trading-framework/order"
 )
@@ -73,6 +74,7 @@ type Registry struct {
 	mu     sync.Mutex
 	permID map[int]order.Order
 	ref    map[string]order.Order
+	sink   order.FillSink
 }
 
 // NewRegistry returns an empty registry.
@@ -81,6 +83,17 @@ func NewRegistry() *Registry {
 		permID: map[int]order.Order{},
 		ref:    map[string]order.Order{},
 	}
+}
+
+// WithSink sends the fills the registry names to a sink.
+//
+// The sink is optional: without one the registry still names the
+// fills and logs them.
+func (r *Registry) WithSink(sink order.FillSink) *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sink = sink
+	return r
 }
 
 // Record remembers an order under the broker's permanent id.
@@ -167,6 +180,7 @@ func (r *Registry) log(log Logger, f Fill) {
 	case PermIDMatch:
 		fields = append(fields, "symbol", o.Symbol, "side", o.Side.String())
 		log.Info("order filled", fields...)
+		r.forward(o.Symbol, o.Side, f)
 
 	case RefMatch:
 		// The fill named the order by its reference, which means it
@@ -175,6 +189,7 @@ func (r *Registry) log(log Logger, f Fill) {
 		// closes the trade, so it trades the opposite side.
 		fields = append(fields, "symbol", o.Symbol, "side", opposite(o.Side).String())
 		log.Info("order filled", fields...)
+		r.forward(o.Symbol, opposite(o.Side), f)
 
 	default:
 		// A fill for an order the framework did not place is worth
@@ -182,6 +197,28 @@ func (r *Registry) log(log Logger, f Fill) {
 		// the framework cannot say what it was.
 		log.Warn("fill for an order the framework did not place", fields...)
 	}
+}
+
+// forward hands a named fill to the sink.
+//
+// The broker's report does not carry a timestamp, so the fill is
+// stamped with the moment it arrived. That is the truth of a live
+// fill: the broker reported it then.
+func (r *Registry) forward(symbol string, side order.Side, f Fill) {
+	r.mu.Lock()
+	sink := r.sink
+	r.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	sink.OnFill(order.Fill{
+		Symbol:     symbol,
+		Side:       side,
+		Quantity:   f.Quantity,
+		Price:      f.Price,
+		Time:       time.Now(),
+		Commission: f.Commission,
+	})
 }
 
 // opposite returns the side that trades against the given one.

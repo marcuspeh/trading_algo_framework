@@ -23,6 +23,7 @@ import (
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 	"github.com/marcuspeh/trading-framework/universe"
 )
 
@@ -74,6 +75,14 @@ type App struct {
 	// fills remembers the orders the live executor places, so the
 	// fills the broker reports later can be named.
 	fills *fills.Registry
+
+	// tearsheet collects the run's performance and writes it out.
+	tearsheet *tearsheet.Writer
+
+	// tearsheetDir is where the tear sheets are written, and
+	// tearsheetCurrency is what their amounts are in.
+	tearsheetDir      string
+	tearsheetCurrency string
 
 	jobs   []job.Job
 	warmup []warmupEntry
@@ -159,6 +168,25 @@ func WithStderrLogger() Option {
 	return func(a *App) { a.logger = logging.NewTextLogger(os.Stderr) }
 }
 
+// WithTearsheetDir sets the directory the tear sheets are written to.
+//
+// The default is "tearsheets", relative to the working directory. A
+// backtest writes one file for the run; a live run writes one file per
+// trading day.
+func WithTearsheetDir(dir string) Option {
+	return func(a *App) { a.tearsheetDir = dir }
+}
+
+// WithTearsheetCurrency sets the currency the tear sheet's amounts are
+// written in.
+//
+// The default is USD. The framework does not know the account's
+// currency - a backtest is given a starting cash, not a currency - so
+// it says this one.
+func WithTearsheetCurrency(cur string) Option {
+	return func(a *App) { a.tearsheetCurrency = cur }
+}
+
 // WithLogFile creates a TXT-file logger.
 func WithLogFile(path string) Option {
 	return func(a *App) {
@@ -221,7 +249,9 @@ func WithLive(cfg LiveConfig) Option {
 // NewApp constructs an App with the supplied options.
 func NewApp(opts ...Option) *App {
 	a := &App{
-		logger: logging.Nop(),
+		logger:            logging.Nop(),
+		tearsheetDir:      "tearsheets",
+		tearsheetCurrency: "USD",
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -292,12 +322,23 @@ func (a *App) RunContext(ctx context.Context) (err error) {
 	if err := a.resolve(); err != nil {
 		return err
 	}
+
 	switch {
 	case a.backtestCfg != nil:
-		return a.runBacktest(ctx)
+		err = a.runBacktest(ctx)
 	case a.liveCfg != nil:
-		return a.runLive(ctx)
+		err = a.runLive(ctx)
 	default:
 		return errors.New("app: configure WithBacktest or WithLive")
 	}
+
+	// The run is over, so the tear sheet is written out. A tear sheet
+	// that cannot be written is worth a warning, not a failed run: the
+	// trading is what matters, and it already happened.
+	if a.tearsheet != nil {
+		if werr := a.tearsheet.Flush(); werr != nil {
+			a.logger.Warn("tearsheet not written", "err", werr.Error())
+		}
+	}
+	return err
 }

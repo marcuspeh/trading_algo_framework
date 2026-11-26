@@ -18,6 +18,7 @@ import (
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 )
 
 // resolve wires up the convenience stacks (backtest/live) and validates
@@ -106,6 +107,20 @@ func (a *App) resolveBacktest() error {
 	// belongs to.
 	a.session = clock.NewSession(a.btClock, a.calendar)
 
+	// The tear sheet collects the run's performance. A backtest is one
+	// run, so it is one file.
+	a.tearsheet = tearsheet.NewWriter(a.tearsheetDir, func(time.Time) string {
+		return fmt.Sprintf("backtest-%s_to-%s.html",
+			cfg.Start.Format("2006-01-02"), cfg.End.Format("2006-01-02"))
+	}, a.logger)
+	a.tearsheet.Meta(tearsheet.Meta{
+		Mode:     "backtest",
+		Start:    cfg.Start,
+		End:      cfg.End,
+		Starting: cfg.StartingCash,
+		Currency: a.tearsheetCurrency,
+	})
+
 	mockBroker := mock.New(mock.Config{
 		Portfolio:          a.portfolio.(*portfolio.Backtest),
 		Bars:               bars,
@@ -114,6 +129,7 @@ func (a *App) resolveBacktest() error {
 		Commission:         cfg.Commission,
 		CommissionPerShare: cfg.CommissionPerShare,
 		Logger:             a.logger,
+		Fills:              a.tearsheet,
 	})
 	a.btBroker = mockBroker
 	a.executor = execution.NewBroker(mockBroker)
@@ -142,9 +158,19 @@ func (a *App) resolveLive() error {
 	a.session = clock.NewSession(a.clock, a.calendar)
 	a.portfolio = portfolio.NewLive()
 
+	// The tear sheet collects the run's performance. A live run lasts
+	// longer than a day, so it writes one file per trading day.
+	a.tearsheet = tearsheet.NewWriter(a.tearsheetDir, func(day time.Time) string {
+		return "live-" + day.Format("2006-01-02") + ".html"
+	}, a.logger)
+	a.tearsheet.Meta(tearsheet.Meta{
+		Mode:     "live",
+		Currency: a.tearsheetCurrency,
+	})
+
 	// The registry remembers the orders the executor places, so the
 	// fills the broker reports later can be named.
-	a.fills = fills.NewRegistry()
+	a.fills = fills.NewRegistry().WithSink(a.tearsheet)
 	a.executor = execution.NewBroker(cfg.Broker).WithFills(a.fills)
 	if a.risk == nil {
 		a.risk = risk.NewBasic()
@@ -183,6 +209,7 @@ func (a *App) runBacktest(parent context.Context) error {
 		Session:      a.session,
 		Calendar:     a.calendar,
 		Broker:       a.btBroker,
+		Observer:     a.tearsheet,
 	})
 	if err != nil {
 		return fmt.Errorf("app: backtest engine: %w", err)
@@ -319,6 +346,7 @@ func (a *App) runLive(parent context.Context) error {
 		IsTradingDay: a.tradingDay,
 		Fills:        a.fills,
 		FillWebhook:  a.liveCfg.FillWebhook,
+		Observer:     a.tearsheet,
 	})
 	if err != nil {
 		return fmt.Errorf("app: live engine: %w", err)

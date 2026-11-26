@@ -74,6 +74,7 @@ func TestApp_JobSeesTheSessionItShould(t *testing.T) {
 		app.WithMarketClient(clients.NewStaticBars(bars)),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "preopen", Time: job.Time(7, 30), Handler: record("preopen"),

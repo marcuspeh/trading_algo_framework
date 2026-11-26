@@ -53,6 +53,7 @@ func TestApp_BacktestEndToEnd(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "demo", Time: job.Time(16, 0), Handler: noopJob,
@@ -71,6 +72,7 @@ func TestApp_LiveRequiresBroker(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob})
 	if err := a.Run(); err == nil {
@@ -125,6 +127,7 @@ func TestApp_BacktestContextReportsBacktestMode(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{Name: "demo", Time: job.Time(16, 0), Handler: handler}); err != nil {
 		t.Fatal(err)
@@ -152,6 +155,7 @@ func TestApp_WarmupFetchesHistory(t *testing.T) {
 		app.WithMarketClient(mkt),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 20); err != nil {
 		t.Fatal(err)

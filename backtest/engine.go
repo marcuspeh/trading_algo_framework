@@ -20,6 +20,7 @@ import (
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
 	"github.com/marcuspeh/trading-framework/scheduler"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 )
 
 // Engine drives a backtest run.
@@ -35,6 +36,7 @@ type Engine struct {
 	isTradingDay portfolio.TradingDayFunc
 	session      *clock.Session
 	broker       broker.SessionAdvancer
+	observer     tearsheet.Observer
 
 	// lastSession is the most recent session the resting orders have
 	// been evaluated against.
@@ -76,6 +78,10 @@ type Config struct {
 	// broker.SessionAdvancer, the engine tells it when a session has
 	// closed so it can evaluate the orders resting at it.
 	Broker broker.SessionAdvancer
+
+	// Observer watches the run's portfolio value. It is optional: an
+	// engine without one keeps the value to itself.
+	Observer tearsheet.Observer
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -132,6 +138,7 @@ func New(cfg Config) (*Engine, error) {
 		isTradingDay: isTradingDay,
 		session:      session,
 		broker:       cfg.Broker,
+		observer:     cfg.Observer,
 	}
 	// The scheduler resolves close-relative slots against the same
 	// session the engine does.
@@ -164,6 +171,11 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 		return fmt.Errorf("backtest: no jobs registered")
 	}
 
+	// The run starts with the account it was given: the first point of
+	// the equity curve is what the portfolio was worth before the
+	// first trade.
+	e.observeEquity(e.start)
+
 	for cur := e.start; !cur.After(e.end); cur = cur.AddDate(0, 0, 1) {
 		if err := parent.Err(); err != nil {
 			return nil
@@ -190,9 +202,21 @@ func (e *Engine) Run(parent context.Context, jc job.Context) error {
 			if err := e.scheduler.FireAt(parent, jc, e.handler, at); err != nil {
 				return err
 			}
+
+			// The value is taken after the jobs have run, so the
+			// trades they made are already in it.
+			e.observeEquity(at)
 		}
 	}
 	return nil
+}
+
+// observeEquity reports the portfolio's value to the observer.
+func (e *Engine) observeEquity(at time.Time) {
+	if e.observer == nil {
+		return
+	}
+	e.observer.OnEquity(at, e.portfolio.Value())
 }
 
 // anchor returns the session a timestamp belongs to.

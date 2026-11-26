@@ -52,6 +52,7 @@ func TestApp_ExpressesTheReferenceSchedule(t *testing.T) {
 			app.WithMarketClient(clients.NewStaticBars(nil)),
 			app.WithUniverseClient(fakeUniverse{}),
 			app.WithConfigClient(fakeConfig{}),
+			app.WithTearsheetDir(t.TempDir()),
 		)
 
 		add := func(name string, slot job.Slot) {
@@ -140,6 +141,7 @@ func TestApp_CustomMarketClose(t *testing.T) {
 		app.WithMarketClient(clients.NewStaticBars(nil)),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 
 	add := func(name string, slot job.Slot) {

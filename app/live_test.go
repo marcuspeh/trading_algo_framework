@@ -107,6 +107,7 @@ func TestApp_LiveCashIsDerived(t *testing.T) {
 		WithMarketClient(clients.NewStaticBars(bars)),
 		WithUniverseClient(liveFakeUniverse{}),
 		WithConfigClient(liveFakeConfig{}),
+		WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "noop", Time: job.Time(16, 0),
@@ -148,6 +149,7 @@ func TestApp_LiveListensForFills(t *testing.T) {
 		WithUniverseClient(liveFakeUniverse{}),
 		WithConfigClient(liveFakeConfig{}),
 		WithLogger(log),
+		WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "noop", Time: job.Time(16, 0),

@@ -425,6 +425,42 @@ for i := range bars {
 value := sma.Value()
 ```
 
+### Tear sheets
+
+Every run leaves a performance page behind. A backtest writes one file for
+the run; a live run writes one file per trading day.
+
+```text
+tearsheets/backtest-2025-01-01_to-2025-02-01.html
+tearsheets/live-2026-11-26.html
+```
+
+The page is a single self-contained HTML file. It fetches nothing, so it
+opens from disk and travels well. It carries the run's headline numbers
+(total return, CAGR, Sharpe, Sortino, max drawdown, volatility, win rate,
+profit factor, exposure and fees), the portfolio's value at each close,
+the drawdown from its running peak, the return of each month, and every
+closed trade with its profit or loss.
+
+No strategy code is involved: the engines report the portfolio's value
+and the brokers report their fills, and the framework does the rest. Two
+options move it:
+
+```go
+app.WithTearsheetDir("reports")    // where the files go (default "tearsheets")
+app.WithTearsheetCurrency("EUR")   // what the amounts are in (default "USD")
+```
+
+A live run's daily file holds the run from its start up to that day. The
+file for a day is written when the next day starts, and the file for the
+last day is written when the run stops.
+
+Two things about a live tear sheet are worth knowing. Its value curve is
+sampled when the framework reconciles with the broker - before each job
+and once more when the run stops - so it holds the broker's own net asset
+value at those moments rather than a continuous mark. And its currency is
+the one the strategy says: the framework does not read it from the broker.
+
 ## Package layout
 
 ```
@@ -451,6 +487,7 @@ trading-framework/
 ├── portfolio/   # Portfolio interface + Backtest/Live
 ├── risk/        # risk.Manager (Basic implementation)
 ├── scheduler/   # Scheduler interface + Backtest/Real
+├── tearsheet/   # performance page: metrics + HTML renderer
 └── universe/    # universe.Client interface
 ```
 

@@ -46,6 +46,7 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 		app.WithMarketClient(m),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 5); err != nil {
 		t.Fatal(err)
@@ -95,6 +96,7 @@ func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
 		app.WithMarketClient(m),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 5); err != nil {
 		t.Fatal(err)
