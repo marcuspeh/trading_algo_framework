@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
@@ -46,6 +47,7 @@ import (
 	"github.com/marcuspeh/trading-framework/config"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 )
 
 const (
@@ -399,6 +401,15 @@ func main() {
 
 	start, end := backtestWindow()
 
+	// The strategy names itself, so its tear sheets and its history
+	// are its own and not another strategy's.
+	store, err := tearsheet.NewSQLiteStore(filepath.Join("tearsheets", "simple-strategy.db"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tearsheet store:", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
 	a := app.NewApp(
 		app.WithCalendarProvider(cal),
 		app.WithBacktest(app.BacktestConfig{
@@ -413,6 +424,8 @@ func main() {
 		app.WithUniverseClient(universe),
 		app.WithConfigClient(cfg),
 		app.WithStdoutLogger(),
+		app.WithStrategyID("simple-strategy"),
+		app.WithTearsheetStore(store),
 	)
 
 	if err := a.RegisterJob(job.Job{

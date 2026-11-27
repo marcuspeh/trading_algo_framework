@@ -35,6 +35,13 @@ func (a *App) resolve() error {
 		return err
 	}
 
+	// A persisted run has to belong to a strategy: the store holds the
+	// history of one strategy's runs, and without an id there is no
+	// telling whose history it is.
+	if a.tearsheetStore != nil && a.strategyID == "" {
+		return errors.New("app: a tear sheet store needs a strategy id (use WithStrategyID)")
+	}
+
 	if a.backtestCfg != nil {
 		return a.resolveBacktest()
 	}
@@ -110,10 +117,18 @@ func (a *App) resolveBacktest() error {
 	// The tear sheet collects the run's performance. A backtest is one
 	// run, so it is one file.
 	a.tearsheet = tearsheet.NewWriter(a.tearsheetDir, func(time.Time) string {
-		return fmt.Sprintf("backtest-%s_to-%s.html",
+		return fmt.Sprintf("%sbacktest-%s_to-%s.html", a.filePrefix(),
 			cfg.Start.Format("2006-01-02"), cfg.End.Format("2006-01-02"))
 	}, a.logger)
 	a.tearsheet.Meta(tearsheet.Meta{
+		Mode:     "backtest",
+		Start:    cfg.Start,
+		End:      cfg.End,
+		Starting: cfg.StartingCash,
+		Currency: a.tearsheetCurrency,
+	})
+	a.tearsheet.WithStore(a.tearsheetStore, a.runKey("backtest", cfg.Start, cfg.End), tearsheet.Run{
+		Strategy: a.strategyID,
 		Mode:     "backtest",
 		Start:    cfg.Start,
 		End:      cfg.End,
@@ -139,6 +154,32 @@ func (a *App) resolveBacktest() error {
 	return nil
 }
 
+// filePrefix names the strategy in the tear sheet's file name.
+//
+// It is empty when the strategy has no id, so a strategy that does not
+// name itself keeps the plain names.
+func (a *App) filePrefix() string {
+	if a.strategyID == "" {
+		return ""
+	}
+	return a.strategyID + "-"
+}
+
+// runKey says which run of which strategy a tear sheet belongs to.
+//
+// A backtest is a run over a window, so the window is part of the key
+// and the same window can be run again without disturbing the last
+// one. A live run is one run of the strategy, so its key is the same
+// every time the service starts: that is what lets it find its history
+// back.
+func (a *App) runKey(mode string, start, end time.Time) string {
+	key := a.strategyID + "/" + mode
+	if mode == "backtest" {
+		key += "/" + start.Format("2006-01-02") + "_" + end.Format("2006-01-02")
+	}
+	return key
+}
+
 func (a *App) resolveLive() error {
 	cfg := a.liveCfg
 	if cfg.Broker == nil {
@@ -161,12 +202,29 @@ func (a *App) resolveLive() error {
 	// The tear sheet collects the run's performance. A live run lasts
 	// longer than a day, so it writes one file per trading day.
 	a.tearsheet = tearsheet.NewWriter(a.tearsheetDir, func(day time.Time) string {
-		return "live-" + day.Format("2006-01-02") + ".html"
+		return fmt.Sprintf("%slive-%s.html", a.filePrefix(), day.Format("2006-01-02"))
 	}, a.logger)
 	a.tearsheet.Meta(tearsheet.Meta{
 		Mode:     "live",
 		Currency: a.tearsheetCurrency,
 	})
+	// A live run is one run of the strategy, however many times the
+	// service restarts: the key says so, and the store keeps the
+	// history across the restarts.
+	a.tearsheet.WithStore(a.tearsheetStore, a.runKey("live", time.Time{}, time.Time{}), tearsheet.Run{
+		Strategy: a.strategyID,
+		Mode:     "live",
+		Currency: a.tearsheetCurrency,
+	})
+
+	// The history of a live run is the strategy's, and the strategy's
+	// own: the service loads it back when it starts again. A backtest
+	// does not, because a run over a window is self-contained - and
+	// because a run of the same window again would otherwise carry
+	// the last one's points with it.
+	if err := a.tearsheet.Load(context.Background()); err != nil {
+		return fmt.Errorf("app: tearsheet history: %w", err)
+	}
 
 	// The registry remembers the orders the executor places, so the
 	// fills the broker reports later can be named.

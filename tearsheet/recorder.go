@@ -25,6 +25,7 @@ type lot struct {
 type Recorder struct {
 	mu     sync.Mutex
 	points []Point
+	fills  []order.Fill
 	trades []Trade
 	lots   map[string][]lot
 	fees   float64
@@ -52,6 +53,48 @@ func (r *Recorder) OnFill(f order.Fill) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.fills = append(r.fills, f)
+	r.match(f)
+}
+
+// Events returns the recorded events of the run: the portfolio's value
+// at each sample, and the fills that moved it.
+//
+// The closed trades are not part of it: they are derived from the
+// fills, so a run that is loaded back is matched the same way the run
+// that recorded it was.
+func (r *Recorder) Events() Events {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	points := make([]Point, len(r.points))
+	copy(points, r.points)
+	fills := make([]order.Fill, len(r.fills))
+	copy(fills, r.fills)
+	return Events{Equity: points, Fills: fills}
+}
+
+// Restore puts a run's events back into the recorder.
+//
+// The equity samples are taken as they are. The fills are replayed, so
+// the closed trades and the open lots they leave behind are matched
+// the same way they were when they were first recorded.
+//
+// It is what a live service does after it restarts: it loads its
+// history back and carries on where it left off.
+func (r *Recorder) Restore(evts Events) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.points = append(r.points, evts.Equity...)
+	for _, f := range evts.Fills {
+		r.match(f)
+	}
+}
+
+// match books a fill against the open lots. It is called with the lock
+// held.
+func (r *Recorder) match(f order.Fill) {
 	r.fees += f.Commission
 	if f.Quantity <= 0 {
 		return

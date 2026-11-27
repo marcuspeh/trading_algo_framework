@@ -2,6 +2,7 @@ package tearsheet
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,13 @@ type Writer struct {
 	rec  *Recorder
 	meta Meta
 	day  time.Time
+
+	// store keeps the run's events, and key says which run of which
+	// strategy they belong to. Both are empty when the run is not
+	// persisted.
+	store Store
+	key   string
+	run   Run
 }
 
 // NewWriter returns a Writer that writes into dir.
@@ -48,6 +56,83 @@ func NewWriter(dir string, name func(day time.Time) string, log Logger) *Writer 
 		name: name,
 		log:  log,
 		rec:  NewRecorder(),
+	}
+}
+
+// WithStore keeps the run's events in a store.
+//
+// The key says which run of which strategy the events belong to, so a
+// service that restarts finds its own history back and a strategy
+// never sees another one's.
+//
+// The store is optional: without one the run's events live in the
+// writer's memory and are gone when the process stops.
+func (w *Writer) WithStore(store Store, key string, run Run) *Writer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.store = store
+	w.key = key
+	w.run = run
+	return w
+}
+
+// Load reads the run's history back from the store.
+//
+// It is what a live service does after it restarts: the events it
+// recorded before are put back, so the tear sheet carries the whole
+// run and not only the part since the restart.
+//
+// Loading a run that was never stored is not an error: the history
+// starts empty.
+func (w *Writer) Load(ctx context.Context) error {
+	w.mu.Lock()
+	store, key := w.store, w.key
+	w.mu.Unlock()
+
+	if store == nil {
+		return nil
+	}
+
+	run, evts, err := store.Load(ctx, key)
+	if err != nil {
+		return err
+	}
+	if len(evts.Equity) == 0 && len(evts.Fills) == 0 {
+		return nil
+	}
+
+	w.mu.Lock()
+	w.rec.Restore(evts)
+	// The run that was loaded is the run being continued.
+	if !run.Start.IsZero() {
+		w.run.Start = run.Start
+	}
+	w.mu.Unlock()
+
+	w.log.Info("tearsheet history loaded",
+		"key", key,
+		"equity_points", len(evts.Equity),
+		"fills", len(evts.Fills),
+	)
+	return nil
+}
+
+// save records the run's events in the store.
+//
+// A store that cannot be written is worth a warning, not a failed
+// run: the trading is what matters, and it already happened.
+func (w *Writer) save(ctx context.Context) {
+	w.mu.Lock()
+	store, key, run := w.store, w.key, w.run
+	if store == nil {
+		w.mu.Unlock()
+		return
+	}
+	evts := w.rec.Events()
+	w.mu.Unlock()
+
+	if err := store.Save(ctx, key, run, evts); err != nil {
+		w.log.Warn("tearsheet history not saved", "key", key, "err", err.Error())
 	}
 }
 
@@ -68,7 +153,6 @@ func (w *Writer) Meta(meta Meta) {
 // holds that day, and not the one that followed it.
 func (w *Writer) OnEquity(at time.Time, value float64) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	if !w.day.IsZero() && !sameDay(w.day, at) {
 		if err := w.write(w.day); err != nil {
@@ -78,11 +162,18 @@ func (w *Writer) OnEquity(at time.Time, value float64) {
 
 	w.rec.OnEquity(at, value)
 	w.day = at
+	w.mu.Unlock()
+
+	w.save(context.Background())
 }
 
 // OnFill records a fill.
 func (w *Writer) OnFill(f order.Fill) {
+	w.mu.Lock()
 	w.rec.OnFill(f)
+	w.mu.Unlock()
+
+	w.save(context.Background())
 }
 
 // Flush writes the tear sheet for the day the run is in.
@@ -91,13 +182,27 @@ func (w *Writer) OnFill(f order.Fill) {
 // empty tear sheet says more than no file at all.
 func (w *Writer) Flush() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	day := w.day
 	if day.IsZero() {
 		day = time.Now()
 	}
-	return w.write(day)
+	err := w.write(day)
+	w.mu.Unlock()
+
+	w.save(context.Background())
+	return err
+}
+
+// Report builds the tear sheet's report from what the writer has
+// collected.
+//
+// It is what the writer renders, and it is how a caller reads the run's
+// numbers without reading the file.
+func (w *Writer) Report(meta Meta) Report {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.report()
 }
 
 // report builds the report. It is called with the lock held.

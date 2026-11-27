@@ -443,12 +443,21 @@ the drawdown from its running peak, the return of each month, and every
 closed trade with its profit or loss.
 
 No strategy code is involved: the engines report the portfolio's value
-and the brokers report their fills, and the framework does the rest. Two
+and the brokers report their fills, and the framework does the rest. Three
 options move it:
 
 ```go
 app.WithTearsheetDir("reports")    // where the files go (default "tearsheets")
 app.WithTearsheetCurrency("EUR")   // what the amounts are in (default "USD")
+app.WithStrategyID("momentum")     // what the strategy calls itself
+```
+
+A strategy that names itself gets its files named after it, so two
+strategies can share a directory:
+
+```text
+tearsheets/momentum-backtest-2025-01-01_to-2025-02-01.html
+tearsheets/momentum-live-2026-11-26.html
 ```
 
 A live run's daily file holds the run from its start up to that day. The
@@ -460,6 +469,54 @@ sampled when the framework reconciles with the broker - before each job
 and once more when the run stops - so it holds the broker's own net asset
 value at those moments rather than a continuous mark. And its currency is
 the one the strategy says: the framework does not read it from the broker.
+
+### Keeping the history
+
+A tear sheet lives in the process that wrote it, so a live service that
+restarts starts its report from nothing. A store keeps the run's events
+instead, and the service picks them up where it left off:
+
+```go
+store, err := tearsheet.NewSQLiteStore("tearsheets.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer store.Close()
+
+a := app.NewApp(
+    app.WithStrategyID("momentum"),
+    app.WithTearsheetStore(store),
+    // ...
+)
+```
+
+The store is a SQLite file: no server, and it survives the process that
+wrote it. On startup the run's history is loaded back, so a service that
+restarts carries on with the curve it had rather than beginning again.
+The closed trades are rebuilt from the stored fills, so they are matched
+the same way the run that recorded them matched them.
+
+A store needs a strategy id. It holds the history of one strategy's runs,
+and without an id there is no telling whose history it is. The id is also
+what keys the stored runs: a live run is one run of the strategy, so it
+keeps the same key however often the service restarts, while a backtest's
+key carries its window, so the same window can be run again without
+disturbing the last run.
+
+The store is an interface, so the history can live somewhere else:
+
+```go
+type Store interface {
+    Save(ctx context.Context, key string, run Run, evts Events) error
+    Load(ctx context.Context, key string) (Run, Events, error)
+    Runs(ctx context.Context, strategy string) ([]Run, error)
+}
+```
+
+What is stored is the run's raw events - the portfolio's value at each
+sample and the fills that moved it. The closed trades and the numbers on
+the page are derived from them, which is why a loaded run reads the same
+as the run that recorded it.
 
 ## Package layout
 

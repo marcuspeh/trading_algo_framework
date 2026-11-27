@@ -84,6 +84,14 @@ type App struct {
 	tearsheetDir      string
 	tearsheetCurrency string
 
+	// strategyID identifies the strategy this App runs. It names the
+	// tear sheets and tells the store whose history this is.
+	strategyID string
+
+	// tearsheetStore keeps the run's history, so it outlives the
+	// process that recorded it.
+	tearsheetStore tearsheet.Store
+
 	jobs   []job.Job
 	warmup []warmupEntry
 }
@@ -185,6 +193,30 @@ func WithTearsheetDir(dir string) Option {
 // it says this one.
 func WithTearsheetCurrency(cur string) Option {
 	return func(a *App) { a.tearsheetCurrency = cur }
+}
+
+// WithStrategyID names the strategy the App runs.
+//
+// The identifier is what tells one strategy's tear sheets and history
+// from another's: it prefixes the file names and it says whose
+// history a store holds.
+//
+// It is required when a tear sheet store is set, because a run that
+// is persisted has to belong to a strategy.
+func WithStrategyID(id string) Option {
+	return func(a *App) { a.strategyID = id }
+}
+
+// WithTearsheetStore keeps the run's history in a store.
+//
+// The store is what makes the history outlive the process: a live
+// service that restarts loads its history back and carries on where
+// it left off, instead of starting its tear sheet from nothing.
+//
+// It needs a strategy id, so the history of one strategy is never
+// read as the history of another.
+func WithTearsheetStore(store tearsheet.Store) Option {
+	return func(a *App) { a.tearsheetStore = store }
 }
 
 // WithLogFile creates a TXT-file logger.
