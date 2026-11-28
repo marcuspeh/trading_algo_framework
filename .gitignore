@@ -17,3 +17,5 @@ logs/
 
 # Tear sheets the framework writes after every run
 tearsheets/
+# macOS
+.DS_Store
