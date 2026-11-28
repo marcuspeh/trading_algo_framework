@@ -22,6 +22,15 @@ func (emptyMarket) Bars(context.Context, string, int, time.Time) ([]order.Bar, e
 	return nil, nil
 }
 
+// BarsBatch returns no bars.
+func (emptyMarket) BarsBatch(_ context.Context, symbols []string, _ int, _ time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		out[symbol] = nil
+	}
+	return out, nil
+}
+
 // nopLogger discards every log line.
 type nopLogger struct{}
 

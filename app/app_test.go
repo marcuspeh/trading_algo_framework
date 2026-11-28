@@ -17,6 +17,14 @@ func (fakeMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) ([]order
 	return nil, nil
 }
 
+func (fakeMarket) BarsBatch(_ context.Context, symbols []string, _ int, _ time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		out[symbol] = nil
+	}
+	return out, nil
+}
+
 type fakeUniverse struct{}
 
 func (fakeUniverse) Constituents(_ context.Context, _ string, _ time.Time) ([]string, error) {
@@ -180,4 +188,16 @@ func (c *countingMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) (
 	return []order.Bar{
 		{Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Close: 100},
 	}, nil
+}
+
+func (c *countingMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := c.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
 }

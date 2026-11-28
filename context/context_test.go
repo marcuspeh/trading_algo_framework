@@ -23,6 +23,18 @@ func (f *fakeMarket) Bars(_ context.Context, _ string, _ int, asOf time.Time) ([
 	return f.bars, nil
 }
 
+func (f *fakeMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := f.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 type fakeUniverse struct {
 	asOf time.Time
 }
@@ -162,6 +174,18 @@ func (m *countingMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) (
 	return m.bars, nil
 }
 
+func (m *countingMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 // The Context caches bars per symbol per day. Repeated calls on the same
 // day must be served from the cache rather than re-fetching.
 //
@@ -295,10 +319,11 @@ func TestContext_ExplicitModeIsUsed(t *testing.T) {
 // The counts are kept under a lock, because the Context fetches the
 // symbols of a batch concurrently.
 type batchMarket struct {
-	mu    sync.Mutex
-	calls map[string]int
-	bars  map[string][]order.Bar
-	errs  map[string]error
+	mu      sync.Mutex
+	calls   map[string]int
+	batches int
+	bars    map[string][]order.Bar
+	errs    map[string]error
 }
 
 func (m *batchMarket) Bars(_ context.Context, symbol string, _ int, _ time.Time) ([]order.Bar, error) {
@@ -312,6 +337,27 @@ func (m *batchMarket) Bars(_ context.Context, symbol string, _ int, _ time.Time)
 		return nil, err
 	}
 	return m.bars[symbol], nil
+}
+
+func (m *batchMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	m.mu.Lock()
+	m.batches++
+	m.mu.Unlock()
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
+func (m *batchMarket) batchCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.batches
 }
 
 func (m *batchMarket) callCount(symbol string) int {
@@ -383,6 +429,24 @@ func TestContext_BarsLeavesOutASymbolTheMarketCannotServe(t *testing.T) {
 	}
 	if _, ok := got["AAPL"]; !ok {
 		t.Fatal("AAPL should be in the map")
+	}
+}
+
+// The symbols are asked for in one batch request, so a strategy that
+// reads a whole universe pays for one round trip rather than one per
+// name.
+func TestContext_BarsAsksForTheSymbolsInOneBatch(t *testing.T) {
+	mkt := &batchMarket{bars: map[string][]order.Bar{
+		"AAPL": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100}},
+		"MSFT": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 200}},
+	}}
+	c := newBatchCtx(t, mkt)
+
+	if _, err := c.Bars([]string{"AAPL", "MSFT"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := mkt.batchCalls(); n != 1 {
+		t.Fatalf("the market client was asked %d times, want 1", n)
 	}
 }
 

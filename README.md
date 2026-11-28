@@ -26,15 +26,16 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
     if err != nil {
         return nil, err
     }
-    bars, err := ctx.Bars(symbols[0], 5)
+    bars, err := ctx.Bars(symbols[:1], 5)
     if err != nil {
         return nil, err
     }
+    series := bars[symbols[0]]
     pos := ctx.Position(symbols[0])
     if pos.Quantity > 0 {
         return nil, nil
     }
-    limit := bars[len(bars)-1].Close
+    limit := series[len(series)-1].Close
     return []order.Order{{
         Symbol:   symbols[0],
         Side:     order.Buy,
@@ -121,7 +122,7 @@ and live:
 - `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`, on
   the NYSE (US/Eastern) calendar
 - `Mode() Mode` — `job.ModeBacktest` or `job.ModeLive`
-- `Bars(symbol string, lookback int) ([]order.Bar, error)`
+- `Bars(symbols []string, lookback int) (map[string][]order.Bar, error)`
 - `Constituents(etf string) ([]string, error)`
 - `Position(symbol) order.Position`, `Positions() []order.Position`
 - `Cash() float64`, `PortfolioValue() float64`
@@ -242,20 +243,42 @@ Bars and constituents come from the
 and the backtest's fill model reads its prices from the same adapter - so
 the strategy and the fill model can never see different ones.
 
-`ctx.Bars(symbol, n)` returns an error when the symbol has fewer than `n`
-bars, rather than a short history an indicator would silently be computed
-over:
+`ctx.Bars(symbols, n)` returns the bars of each symbol as a map. A symbol
+with fewer than `n` bars is left out of the map, rather than returned as a
+short history an indicator would silently be computed over:
 
 ```go
-bars, err := ctx.Bars("AAPL", 20)
-if errors.Is(err, job.ErrInsufficientBars) {
+bars, err := ctx.Bars([]string{"AAPL", "MSFT"}, 20)
+if err != nil {
+    return nil, err
+}
+series, ok := bars["AAPL"]
+if !ok {
     // Not enough history yet.
 }
 ```
 
+The symbols are fetched in one batch request. The service answers a batch by
+fetching its symbols a few at a time, so a strategy that reads the history
+of a whole universe pays for one round trip rather than one request per
+name.
+
 The adapter keeps what it has fetched and asks the service only for what is
 missing, so a backtest costs one bar per symbol per day rather than a
 window.
+
+A market client implements `market.Client`, which serves one symbol at a
+time and a set of them at once:
+
+```go
+type Client interface {
+    Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error)
+    BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error)
+}
+```
+
+`clients.NewMarket` implements it over the SDK; `clients.StaticBars` serves
+bars from memory for tests.
 
 ### Broker
 
@@ -418,9 +441,10 @@ Technical-analysis indicators live in their own library, [indicators-go](https:/
 import indicators "github.com/marcuspeh/indicators-go"
 
 sma := indicators.NewSMA(20)
-bars, _ := ctx.Bars("AAPL", 50)
-for i := range bars {
-    sma.Update(&bars[i])
+bars, _ := ctx.Bars([]string{"AAPL"}, 50)
+series := bars["AAPL"]
+for i := range series {
+    sma.Update(&series[i])
 }
 value := sma.Value()
 ```

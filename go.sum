@@ -14,8 +14,8 @@ github.com/marcuspeh/ibkr-proxy/sdk/go v0.0.0-20260904165025-4b70f50df904 h1:ae9
 github.com/marcuspeh/ibkr-proxy/sdk/go v0.0.0-20260904165025-4b70f50df904/go.mod h1:uuiXGOB6CtcOBtdc2yNR0iMlU4OedFonJI0Mt+jLo7c=
 github.com/marcuspeh/indicators-go v0.0.0-20260830162248-a9470b0a6c0a h1:N89vakz21IW3xMVbbliWNY6V3AIm5hwJbguK0hUpdIc=
 github.com/marcuspeh/indicators-go v0.0.0-20260830162248-a9470b0a6c0a/go.mod h1:jt2niPlmscJTHX2CckKqLsz0uEfFzyxkZmdhKeBW1AI=
-github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20261114054712-e6aac0c1474a h1:2L38b3VWml25HksKFZKPgSY1qUf50a39isGsPToK58s=
-github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20261114054712-e6aac0c1474a/go.mod h1:qcnKzD4TPO4Gy2Y55jLkcwDRvOqFRcCgn/ow3yjygNU=
+github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20261128041101-b62c72d46788 h1:s/IxQtyoFhSY4PA8xNvMdtE+yYv8h9BOtJ26M2EksJk=
+github.com/marcuspeh/market-data-service/sdk/go v0.0.0-20261128041101-b62c72d46788/go.mod h1:qcnKzD4TPO4Gy2Y55jLkcwDRvOqFRcCgn/ow3yjygNU=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/ncruces/go-strftime v0.1.9 h1:bY0MQC28UADQmHmaF5dgpLmImcShSi2kHU9XLdhx/f4=

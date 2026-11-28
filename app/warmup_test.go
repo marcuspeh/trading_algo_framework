@@ -26,6 +26,18 @@ func (m *recordingMkt) Bars(_ context.Context, _ string, lookback int, asOf time
 	return bars, nil
 }
 
+func (m *recordingMkt) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 // The warmup primes the Context's bar cache, and the cache is keyed by
 // the session the bars were fetched for. The first job of the first day
 // reads the same session, so it must be served from the cache rather

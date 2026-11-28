@@ -10,7 +10,18 @@ import (
 )
 
 type Client interface {
+	// Bars returns up to `lookback` bars for a symbol, ending on or
+	// before asOf.
 	Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error)
+
+	// BarsBatch returns up to `lookback` bars for each of the symbols,
+	// ending on or before asOf.
+	//
+	// The symbols share one window, so they are asked for together
+	// rather than one request each. A symbol the client could not
+	// serve is left out of the map; the error is for a request the
+	// client could not make at all.
+	BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error)
 }
 
 // BarProvider supplies the bar for a symbol on a given date.
