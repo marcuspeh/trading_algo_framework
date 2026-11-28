@@ -38,7 +38,7 @@ func (f *fakeBroker) PlaceMarketOrder(_ context.Context, req execution.MarketOrd
 	}
 	f.orders = append(f.orders, req)
 	f.keys = append(f.keys, key)
-	return &execution.OrderResponse{OrderId: len(f.orders)}, nil
+	return &execution.OrderResponse{OrderId: len(f.orders), PermId: 5000 + len(f.orders)}, nil
 }
 
 func (f *fakeBroker) PlaceLimitOrder(_ context.Context, req execution.LimitOrderRequest, key string) (*execution.OrderResponse, error) {
@@ -46,7 +46,7 @@ func (f *fakeBroker) PlaceLimitOrder(_ context.Context, req execution.LimitOrder
 	defer f.mu.Unlock()
 	f.limitOrders = append(f.limitOrders, req)
 	f.keys = append(f.keys, key)
-	return &execution.OrderResponse{OrderId: 100 + len(f.limitOrders)}, nil
+	return &execution.OrderResponse{OrderId: 100 + len(f.limitOrders), PermId: 6000 + len(f.limitOrders)}, nil
 }
 
 func (f *fakeBroker) PlaceBracketOrder(_ context.Context, req execution.BracketOrderRequest, key string) (*execution.BracketOrderResponse, error) {
@@ -54,7 +54,10 @@ func (f *fakeBroker) PlaceBracketOrder(_ context.Context, req execution.BracketO
 	defer f.mu.Unlock()
 	f.bracketOrders = append(f.bracketOrders, req)
 	f.keys = append(f.keys, key)
-	return &execution.BracketOrderResponse{ParentOrderId: 200 + len(f.bracketOrders)}, nil
+	return &execution.BracketOrderResponse{
+		ParentOrderId: 200 + len(f.bracketOrders),
+		ParentPermId:  7000 + len(f.bracketOrders),
+	}, nil
 }
 
 func (f *fakeBroker) UpdateOrder(_ context.Context, id int, req execution.UpdateOrderRequest) (*execution.OrderResponse, error) {

@@ -51,6 +51,22 @@ type Config struct {
 
 	// CommissionPerShare is charged per unit of quantity.
 	CommissionPerShare float64
+
+	// Logger records the fills the mock books. It is optional: a mock
+	// without one stays quiet.
+	Logger Logger
+
+	// Fills receives the fills the mock books. It is optional: a mock
+	// without one still books them, it just tells nobody.
+	Fills order.FillSink
+}
+
+// Logger records what the mock does.
+//
+// It is the one method the framework's logger has, so a job.Logger
+// satisfies it without an adapter.
+type Logger interface {
+	Info(msg string, fields ...any)
 }
 
 // Mock is an in-memory broker.
@@ -61,6 +77,8 @@ type Mock struct {
 	portfolio *portfolio.Backtest
 	bars      market.BarProvider
 	session   *clock.Session
+	logger    Logger
+	fills     order.FillSink
 
 	slippageBps        float64
 	commission         float64
@@ -165,10 +183,16 @@ func New(cfg Config) *Mock {
 		}
 		s = clock.NewSession(clock.NewBacktest(time.Now()), cfg.Calendar)
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = nopLogger{}
+	}
 	return &Mock{
 		portfolio:          p,
 		bars:               cfg.Bars,
 		session:            s,
+		logger:             logger,
+		fills:              cfg.Fills,
 		slippageBps:        cfg.SlippageBps,
 		commission:         cfg.Commission,
 		commissionPerShare: cfg.CommissionPerShare,
@@ -212,10 +236,7 @@ func (m *Mock) PlaceMarketOrder(ctx context.Context, req broker.MarketOrderReque
 	side := sideOf(req.Action)
 	qty := float64(req.TotalQuantity)
 	fillPrice := m.applySlippage(price, side)
-	m.portfolio.ApplyFill(req.Contract.Symbol, side, qty, fillPrice)
-	m.portfolio.MarkPrice(req.Contract.Symbol, price)
-	m.chargeFee(qty)
-	m.fillPrices[id] = fillPrice
+	m.bookFill(id, req.Contract.Symbol, side, qty, fillPrice, price, session)
 
 	return &broker.OrderResponse{OrderId: id, Status: "Filled"}, nil
 }
@@ -408,7 +429,7 @@ func (m *Mock) AdvanceSession(session time.Time) {
 		}
 
 		if o.fillAgainst(bar) {
-			m.applyFill(o, bar)
+			m.applyFill(o, bar, session)
 			delete(m.orders, id)
 			m.finalStatus[id] = "Filled"
 			// A bracket's legs are one-cancels-the-other: when one
@@ -428,14 +449,43 @@ func (m *Mock) AdvanceSession(session time.Time) {
 // the session's close, not at the fill price: an order that fills at
 // 100 in a session that closed at 205 must not leave the position
 // valued at 100.
-func (m *Mock) applyFill(o *restingOrder, bar order.Bar) {
+func (m *Mock) applyFill(o *restingOrder, bar order.Bar, session time.Time) {
 	price := o.fillPrice(bar)
 	qty := float64(o.quantity)
 
-	m.portfolio.ApplyFill(o.order.Symbol, o.side, qty, price)
-	m.portfolio.MarkPrice(o.order.Symbol, bar.Close)
-	m.chargeFee(qty)
-	m.fillPrices[o.id] = price
+	m.bookFill(o.id, o.order.Symbol, o.side, qty, price, bar.Close, session)
+}
+
+// bookFill records a fill in the portfolio and logs it.
+//
+// The log carries the session the fill happened in, because the log
+// line's own timestamp is the wall clock - which says nothing about
+// when a backtest filled.
+func (m *Mock) bookFill(id int, symbol string, side order.Side, qty, price, mark float64, session time.Time) {
+	m.portfolio.ApplyFill(symbol, side, qty, price)
+	m.portfolio.MarkPrice(symbol, mark)
+	fee := m.chargeFee(qty)
+	m.fillPrices[id] = price
+
+	m.logger.Info("order filled",
+		"id", id,
+		"symbol", symbol,
+		"side", side.String(),
+		"qty", qty,
+		"price", price,
+		"session", session.Format("2006-01-02"),
+	)
+
+	if m.fills != nil {
+		m.fills.OnFill(order.Fill{
+			Symbol:     symbol,
+			Side:       side,
+			Quantity:   qty,
+			Price:      price,
+			Time:       session,
+			Commission: fee,
+		})
+	}
 }
 
 // FillPrice returns the price an order filled at.
@@ -640,12 +690,13 @@ func (m *Mock) applySlippage(price float64, side order.Side) float64 {
 	return price - adj
 }
 
-// chargeFee books the commission on a fill.
-func (m *Mock) chargeFee(quantity float64) {
+// chargeFee books the commission on a fill and returns what it charged.
+func (m *Mock) chargeFee(quantity float64) float64 {
 	fee := m.commission + m.commissionPerShare*quantity
 	if fee > 0 {
 		m.portfolio.ChargeFee(fee)
 	}
+	return fee
 }
 
 // sideOf maps a broker action to a framework side.
@@ -655,3 +706,8 @@ func sideOf(action string) order.Side {
 	}
 	return order.Buy
 }
+
+// nopLogger discards the mock's log lines.
+type nopLogger struct{}
+
+func (nopLogger) Info(string, ...any) {}

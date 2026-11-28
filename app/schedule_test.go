@@ -49,6 +49,7 @@ func TestApp_ScheduleFollowsTheSession(t *testing.T) {
 				app.WithMarketClient(fakeMarket{}),
 				app.WithUniverseClient(fakeUniverse{}),
 				app.WithConfigClient(fakeConfig{}),
+				app.WithTearsheetDir(t.TempDir()),
 			)
 			if err := a.RegisterJob(job.Job{
 				Name: name, Time: s,
@@ -132,6 +133,7 @@ func TestApp_JobsDoNotFireOnHolidays(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "run", Time: job.AtClose(),

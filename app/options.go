@@ -16,12 +16,14 @@ import (
 	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/execution"
+	"github.com/marcuspeh/trading-framework/fills"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/live"
 	"github.com/marcuspeh/trading-framework/logging"
 	"github.com/marcuspeh/trading-framework/market"
 	"github.com/marcuspeh/trading-framework/portfolio"
 	"github.com/marcuspeh/trading-framework/risk"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 	"github.com/marcuspeh/trading-framework/universe"
 )
 
@@ -69,6 +71,26 @@ type App struct {
 
 	// btBroker is the simulated broker used by the backtest stack.
 	btBroker *mock.Mock
+
+	// fills remembers the orders the live executor places, so the
+	// fills the broker reports later can be named.
+	fills *fills.Registry
+
+	// tearsheet collects the run's performance and writes it out.
+	tearsheet *tearsheet.Writer
+
+	// tearsheetDir is where the tear sheets are written, and
+	// tearsheetCurrency is what their amounts are in.
+	tearsheetDir      string
+	tearsheetCurrency string
+
+	// strategyID identifies the strategy this App runs. It names the
+	// tear sheets and tells the store whose history this is.
+	strategyID string
+
+	// tearsheetStore keeps the run's history, so it outlives the
+	// process that recorded it.
+	tearsheetStore tearsheet.Store
 
 	jobs   []job.Job
 	warmup []warmupEntry
@@ -154,6 +176,49 @@ func WithStderrLogger() Option {
 	return func(a *App) { a.logger = logging.NewTextLogger(os.Stderr) }
 }
 
+// WithTearsheetDir sets the directory the tear sheets are written to.
+//
+// The default is "tearsheets", relative to the working directory. A
+// backtest writes one file for the run; a live run writes one file per
+// trading day.
+func WithTearsheetDir(dir string) Option {
+	return func(a *App) { a.tearsheetDir = dir }
+}
+
+// WithTearsheetCurrency sets the currency the tear sheet's amounts are
+// written in.
+//
+// The default is USD. The framework does not know the account's
+// currency - a backtest is given a starting cash, not a currency - so
+// it says this one.
+func WithTearsheetCurrency(cur string) Option {
+	return func(a *App) { a.tearsheetCurrency = cur }
+}
+
+// WithStrategyID names the strategy the App runs.
+//
+// The identifier is what tells one strategy's tear sheets and history
+// from another's: it prefixes the file names and it says whose
+// history a store holds.
+//
+// It is required when a tear sheet store is set, because a run that
+// is persisted has to belong to a strategy.
+func WithStrategyID(id string) Option {
+	return func(a *App) { a.strategyID = id }
+}
+
+// WithTearsheetStore keeps the run's history in a store.
+//
+// The store is what makes the history outlive the process: a live
+// service that restarts loads its history back and carries on where
+// it left off, instead of starting its tear sheet from nothing.
+//
+// It needs a strategy id, so the history of one strategy is never
+// read as the history of another.
+func WithTearsheetStore(store tearsheet.Store) Option {
+	return func(a *App) { a.tearsheetStore = store }
+}
+
 // WithLogFile creates a TXT-file logger.
 func WithLogFile(path string) Option {
 	return func(a *App) {
@@ -197,6 +262,15 @@ func WithBacktest(cfg BacktestConfig) Option {
 // (RealClock, RealScheduler, LiveExecutor, LivePortfolio, Reconciler).
 type LiveConfig struct {
 	Broker execution.Client
+
+	// FillWebhook is the address the broker's fill reports arrive on,
+	// e.g. "127.0.0.1:8000". It is empty when the run does not listen
+	// for them.
+	//
+	// The broker's webhook URL has to point at it: the proxy posts to
+	// {WEBHOOK_URL}/fills, and the proxy's default webhook URL is
+	// http://127.0.0.1:8000/webhook.
+	FillWebhook string
 }
 
 // WithLive configures the App for live mode and wires up the live stack.
@@ -207,7 +281,9 @@ func WithLive(cfg LiveConfig) Option {
 // NewApp constructs an App with the supplied options.
 func NewApp(opts ...Option) *App {
 	a := &App{
-		logger: logging.Nop(),
+		logger:            logging.Nop(),
+		tearsheetDir:      "tearsheets",
+		tearsheetCurrency: "USD",
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -278,12 +354,23 @@ func (a *App) RunContext(ctx context.Context) (err error) {
 	if err := a.resolve(); err != nil {
 		return err
 	}
+
 	switch {
 	case a.backtestCfg != nil:
-		return a.runBacktest(ctx)
+		err = a.runBacktest(ctx)
 	case a.liveCfg != nil:
-		return a.runLive(ctx)
+		err = a.runLive(ctx)
 	default:
 		return errors.New("app: configure WithBacktest or WithLive")
 	}
+
+	// The run is over, so the tear sheet is written out. A tear sheet
+	// that cannot be written is worth a warning, not a failed run: the
+	// trading is what matters, and it already happened.
+	if a.tearsheet != nil {
+		if werr := a.tearsheet.Flush(); werr != nil {
+			a.logger.Warn("tearsheet not written", "err", werr.Error())
+		}
+	}
+	return err
 }

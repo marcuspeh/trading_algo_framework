@@ -2,12 +2,27 @@
 // the trading-framework package.
 //
 // It registers two Jobs (refresh-universe at 09:00, rebalance at 16:00)
-// and runs a backtest over a 10-day window using in-memory fake
-// market data and constituents.
+// and runs a backtest over October 2026.
 //
-// The rebalance strategy uses a 5-day simple moving average: it buys
-// when the last close is above its moving average, and sells when the
-// position is held and the close drops below it.
+// Everything the strategy reads comes from the market-data-service: the
+// SPY's constituents, the daily bars and the exchange calendar. The
+// service has to be running:
+//
+//	docker compose -f ../market-data-service/docker-compose.yml up -d
+//
+// The rebalance strategy is a moving-average crossover over those
+// constituents:
+//
+//   - long when the SMA50 is above the SMA200, short when it is below
+//   - the SMA200 is the stop loss as well: a long is closed when the
+//     close falls to it, a short when the close rises to it. It is
+//     recomputed every day, so the stop follows the average
+//   - a position is also closed when the crossover turns the other
+//     way. The name is a candidate again from the next day on
+//   - at most 10 positions are open at once; when more names want in
+//     than there are slots for them, the ones with the lowest
+//     volatility (the ATR as a percentage of the price) win them
+//   - every position is sized at an equal share of the portfolio
 //
 // Run from the repo root:
 //
@@ -16,23 +31,93 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"time"
 
 	indicators "github.com/marcuspeh/indicators-go"
+	marketdata "github.com/marcuspeh/market-data-service/sdk/go"
 	"github.com/marcuspeh/trading-framework/app"
+	"github.com/marcuspeh/trading-framework/calendar"
 	"github.com/marcuspeh/trading-framework/clients"
+	"github.com/marcuspeh/trading-framework/clock"
 	"github.com/marcuspeh/trading-framework/config"
-	"github.com/marcuspeh/trading-framework/calendar/published"
 	"github.com/marcuspeh/trading-framework/job"
 	"github.com/marcuspeh/trading-framework/order"
+	"github.com/marcuspeh/trading-framework/tearsheet"
 )
+
+const (
+	// universeETF is the ETF whose constituents the strategy trades.
+	universeETF = "SPY"
+
+	// fastPeriod and slowPeriod are the SMA windows of the crossover.
+	// The slow one is also the stop loss.
+	fastPeriod = 50
+	slowPeriod = 200
+
+	// atrPeriod is the window of the ATR that measures volatility.
+	atrPeriod = 14
+
+	// maxPositions is the number of positions the strategy may hold at
+	// once. The config client can override it.
+	maxPositions = 10
+)
+
+// setup is what the strategy knows about one symbol on one day.
+type setup struct {
+	symbol string
+	// price is the last close.
+	price float64
+	// smaFast and smaSlow are the two moving averages.
+	smaFast float64
+	smaSlow float64
+	// volatility is the ATR as a percentage of the price. It is the
+	// risk the tiebreak ranks the candidates by.
+	volatility float64
+}
+
+// long reports whether the crossover asks for a long position.
+func (s setup) long() bool { return s.smaFast > s.smaSlow }
+
+// short reports whether the crossover asks for a short position.
+func (s setup) short() bool { return s.smaFast < s.smaSlow }
+
+// computeSetup reads the crossover and the volatility off a symbol's
+// bars.
+//
+// The indicator maths runs on the framework's bars. order.Bar is the
+// library's bar type, so it feeds straight in.
+func computeSetup(symbol string, bars []order.Bar) setup {
+	fast := indicators.NewSMA(fastPeriod)
+	slow := indicators.NewSMA(slowPeriod)
+	atr := indicators.NewATR(atrPeriod)
+
+	var f, s, a float64
+	for i := range bars {
+		f = fast.Update(&bars[i])
+		s = slow.Update(&bars[i])
+		a = atr.Update(&bars[i])
+	}
+
+	price := bars[len(bars)-1].Close
+	return setup{
+		symbol:     symbol,
+		price:      price,
+		smaFast:    f,
+		smaSlow:    s,
+		volatility: a / price,
+	}
+}
 
 func refresher(ctx job.Context, date time.Time) ([]order.Order, error) {
 	if !ctx.IsTradingDay(date) {
 		return nil, nil
 	}
-	syms, err := ctx.Constituents("SPY")
+	syms, err := ctx.Constituents(universeETF)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +133,7 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 		return nil, nil
 	}
 
-	syms, err := ctx.Constituents("SPY")
+	syms, err := ctx.Constituents(universeETF)
 	if err != nil {
 		return nil, err
 	}
@@ -56,148 +141,292 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
 		return nil, nil
 	}
 
-	target := syms[0]
-	bars, err := ctx.Bars(target, 5)
+	limit, err := positionLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(bars) < 5 {
-		return nil, nil
+
+	// What the crossover says about every name in the universe.
+	//
+	// The framework fetches the bars for the whole universe at once,
+	// so the names it could not serve are simply the ones missing
+	// from the map.
+	bars, err := ctx.Bars(syms, slowPeriod)
+	if err != nil {
+		return nil, err
+	}
+	setups := make([]setup, 0, len(bars))
+	var noHistory []string
+	for _, sym := range syms {
+		b, ok := bars[sym]
+		if !ok {
+			// A name without enough history has no crossover yet. It
+			// is skipped, not fatal: the universe is wider than the
+			// history the service has collected.
+			noHistory = append(noHistory, sym)
+			continue
+		}
+		setups = append(setups, computeSetup(sym, b))
+	}
+	if len(noHistory) > 0 {
+		ctx.Logger().Warn("symbols skipped",
+			"count", len(noHistory),
+			"reason", "not enough history",
+			"examples", names(noHistory),
+		)
 	}
 
-	// The indicator maths runs on the framework's bars. order.Bar is the
-	// library's bar type, so it feeds straight in.
-	sma := indicators.NewSMA(5)
-	var smaValue float64
-	for i := range bars {
-		smaValue = sma.Update(&bars[i])
+	// What the strategy holds today.
+	held := map[string]float64{}
+	for _, p := range ctx.Positions() {
+		held[p.Symbol] = p.Quantity
 	}
-	last := bars[len(bars)-1].Close
+
+	var closes []order.Order
+	var exited int
+
+	for _, s := range setups {
+		qty, ok := held[s.symbol]
+		if !ok {
+			continue
+		}
+		switch {
+		case qty > 0 && (s.price <= s.smaSlow || s.short()):
+			// The long is done: the SMA200 stop was hit, or the
+			// crossover turned and says the other side. The slot is
+			// freed.
+			closes = append(closes, order.Order{
+				Symbol: s.symbol, Side: order.Sell, Quantity: qty, Type: order.Market,
+			})
+			exited++
+		case qty < 0 && (s.price >= s.smaSlow || s.long()):
+			// The short is done, for the same two reasons.
+			closes = append(closes, order.Order{
+				Symbol: s.symbol, Side: order.Buy, Quantity: -qty, Type: order.Market,
+			})
+			exited++
+		}
+	}
+
+	// The names that want a position and do not have one. A name that
+	// was closed today is not one of them: it acts once a day.
+	var candidates []setup
+	for _, s := range setups {
+		if _, ok := held[s.symbol]; ok {
+			continue
+		}
+		if s.long() || s.short() {
+			candidates = append(candidates, s)
+		}
+	}
+
+	// The slots left over: the cap, less the positions that stay open.
+	free := limit - (len(held) - exited)
+	if free < 0 {
+		free = 0
+	}
+
+	// More names want in than there are slots for them. The tiebreak
+	// is the risk: the least volatile name wins the slot.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].volatility < candidates[j].volatility
+	})
+	if free > len(candidates) {
+		free = len(candidates)
+	}
+	opened := candidates[:free]
+	skipped := candidates[free:]
+
+	value := ctx.PortfolioValue()
+	budget := value / float64(limit)
+	cash := ctx.Cash()
+
+	// The last close of every name, which is the price the day's
+	// orders fill at.
+	priceOf := make(map[string]float64, len(setups))
+	for _, s := range setups {
+		priceOf[s.symbol] = s.price
+	}
+
+	orders := make([]order.Order, 0, len(closes)+len(opened))
+	orders = append(orders, closes...)
+
+	// The closes come first: a short's cover frees cash before the
+	// next entry is sized.
+	for _, o := range closes {
+		cash += cashChange(o, priceOf)
+	}
+
+	for _, s := range opened {
+		side := order.Buy
+		if s.short() {
+			side = order.Sell
+		}
+		qty := math.Floor(budget / s.price)
+		if qty < 1 {
+			ctx.Logger().Warn("position too small to open",
+				"symbol", s.symbol,
+				"price", s.price,
+				"budget", budget,
+			)
+			continue
+		}
+		if side == order.Buy && qty*s.price > cash {
+			// The portfolio cannot fund the position at its equal
+			// share, so it is sized at what the cash can buy.
+			qty = math.Floor(cash / s.price)
+			if qty < 1 {
+				ctx.Logger().Warn("not enough cash to open",
+					"symbol", s.symbol,
+					"price", s.price,
+					"cash", cash,
+				)
+				continue
+			}
+		}
+		o := order.Order{Symbol: s.symbol, Side: side, Quantity: qty, Type: order.Market}
+		cash += cashChange(o, priceOf)
+		orders = append(orders, o)
+	}
+
+	if len(skipped) > 0 {
+		// The universe is wider than the number of slots, so most days
+		// leave names without one. The ones that missed by the least
+		// are the interesting ones.
+		missed := make([]string, 0, len(skipped))
+		for _, s := range skipped {
+			missed = append(missed, s.symbol)
+		}
+		ctx.Logger().Info("candidates skipped",
+			"count", len(skipped),
+			"reason", "no free slot",
+			"closest", names(missed),
+		)
+	}
 
 	ctx.Logger().Info("rebalance",
 		"date", date.Format("2006-01-02"),
-		"target", target,
-		"bars", len(bars),
-		"close", last,
-		"sma", smaValue,
+		"portfolio_value", value,
 		"cash", ctx.Cash(),
-		"portfolio_value", ctx.PortfolioValue(),
+		"positions", len(held),
+		"candidates", len(candidates),
+		"opened", len(opened),
+		"exited", exited,
+		"orders", len(orders),
 	)
 
-	pos := ctx.Position(target)
-
-	// Price above its moving average: go long.
-	if last > smaValue {
-		if pos.Quantity > 0 {
-			return nil, nil
-		}
-		return []order.Order{{
-			Symbol:   target,
-			Side:     order.Buy,
-			Quantity: 10,
-			Type:     order.Market,
-		}}, nil
-	}
-
-	// Price below its moving average: close the long.
-	if pos.Quantity > 0 {
-		return []order.Order{{
-			Symbol:   target,
-			Side:     order.Sell,
-			Quantity: pos.Quantity,
-			Type:     order.Market,
-		}}, nil
-	}
-
-	return nil, nil
+	return orders, nil
 }
 
-// fakeBars builds a few months of daily bars, ending after the
-// backtest window.
+// names returns up to five names, for a log line that names a handful
+// of a much longer list.
+func names(syms []string) []string {
+	if len(syms) > 5 {
+		return syms[:5]
+	}
+	return syms
+}
+
+// positionLimit reads the number of positions the strategy may hold.
 //
-// The history starts well before the backtest does: a job at the close
-// of the first day reads that day's bar, and a strategy that asks for
-// a moving average needs the days before it.
-func fakeBars() map[string][]order.Bar {
-	start := time.Date(2023, 10, 2, 0, 0, 0, 0, time.UTC)
-	out := map[string][]order.Bar{}
-	prices := map[string]float64{
-		"AAPL": 180.0,
-		"MSFT": 370.0,
-		"NVDA": 480.0,
-	}
-	for sym, p := range prices {
-		bars := make([]order.Bar, 0, 100)
-		for d := 0; d < 100; d++ {
-			date := start.AddDate(0, 0, d)
-			if date.Weekday() == time.Saturday || date.Weekday() == time.Sunday {
-				continue
-			}
-			open := p
-			close := p + float64(d)*0.5
-			high := close + 1.0
-			low := open - 0.5
-			bars = append(bars, order.Bar{
-				Symbol:    sym,
-				Timestamp: date,
-				Open:      open,
-				High:      high,
-				Low:       low,
-				Close:     close,
-				Volume:    1_000_000,
-			})
+// The config client may narrow it; the default is maxPositions.
+func positionLimit(ctx job.Context) (int, error) {
+	raw, err := ctx.Config().Get("max_positions")
+	if err != nil {
+		if err == job.ErrNotFound {
+			return maxPositions, nil
 		}
-		out[sym] = bars
+		return 0, err
 	}
-	return out
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("max_positions: %w", err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("max_positions: %d is not a position count", n)
+	}
+	return n, nil
+}
+
+// cashChange is what an order does to the cash, at the last close.
+//
+// A buy spends cash and a sell raises it. It is an estimate: the fill
+// carries slippage and a commission, so the real cash differs a little.
+// It is enough to keep the strategy from spending money it does not
+// have.
+func cashChange(o order.Order, priceOf map[string]float64) float64 {
+	notional := o.Quantity * priceOf[o.Symbol]
+	if o.Side == order.Buy {
+		return -notional
+	}
+	return notional
+}
+
+// marketDataURL is where the market-data-service runs.
+//
+// It is the same variable the reference algo reads, so both talk to the
+// same service. An empty value leaves the SDK on its own default.
+func marketDataURL() string {
+	return os.Getenv("MARKET_DATA_URL")
+}
+
+// backtestWindow is the window the example runs over: January 2025.
+//
+// The strategy needs 200 sessions of history before it can read a
+// crossover, so the window is where the service's history is, not
+// where the strategy's is. Change the dates to move it.
+func backtestWindow() (start, end time.Time) {
+	start = time.Date(2025, 1, 1, 0, 0, 0, 0, clock.NYSE)
+	end = time.Date(2025, 2, 1, 0, 0, 0, 0, clock.NYSE)
+	return start, end
 }
 
 func main() {
-	bars := fakeBars()
-	// The same in-memory bars serve the strategy and the fill model, so
-	// the two can never see different prices.
-	market := clients.NewStaticBars(bars)
+	// The market-data-service is the source of everything the strategy
+	// reads: the constituents, the daily bars and the exchange
+	// calendar.
+	md := marketdata.NewClient(marketDataURL())
+	cal := calendar.NewService(md)
 
-	constituentsByDate := map[string]map[string][]string{
-		"SPY": {
-			"2024-01-02": {"AAPL", "MSFT", "NVDA"},
-		},
-	}
-	constituents := clients.NewStaticConstituents(constituentsByDate)
+	// The market adapter serves the strategy and the fill model from
+	// the same cached series, so the two can never see different
+	// prices.
+	market := clients.NewMarket(md, cal)
+	universe := clients.NewConstituents(md)
 
 	cfg := config.NewMap(map[string]string{
 		"strategy":      "simple",
-		"max_positions": "5",
+		"max_positions": "10",
 	})
 
+	start, end := backtestWindow()
+
+	// The strategy names itself, so its tear sheets and its history
+	// are its own and not another strategy's.
+	store, err := tearsheet.NewSQLiteStore(filepath.Join("tearsheets", "simple-strategy.db"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tearsheet store:", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
 	a := app.NewApp(
-		// The exchange calendar. A live strategy asks the
-		// market-data-service for it:
-		//
-		//   calendar.NewService(marketdata.NewClient("http://localhost:8001"))
-		//
-		// This example runs on in-memory data, so it uses the
-		// published NYSE calendars instead of a running service.
-		app.WithCalendarProvider(published.New()),
+		app.WithCalendarProvider(cal),
 		app.WithBacktest(app.BacktestConfig{
-			Start:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
-			End:          time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC),
+			Start:        start,
+			End:          end,
 			StartingCash: 10_000,
 
 			SlippageBps: 5,
 			Commission:  1,
 		}),
 		app.WithMarketClient(market),
-		app.WithUniverseClient(constituents),
+		app.WithUniverseClient(universe),
 		app.WithConfigClient(cfg),
 		app.WithStdoutLogger(),
+		app.WithStrategyID("simple-strategy"),
+		app.WithTearsheetStore(store),
 	)
-
-	// Prime the price history for AAPL before the first job runs.
-	if err := a.AddWarmup("AAPL", 5); err != nil {
-		fmt.Fprintln(os.Stderr, "warmup:", err)
-		os.Exit(1)
-	}
 
 	if err := a.RegisterJob(job.Job{
 		Name:    "refresh-universe",

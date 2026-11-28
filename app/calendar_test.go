@@ -76,6 +76,7 @@ func TestApp_CalendarProviderDecidesTradingDays(t *testing.T) {
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
 		app.WithCalendarProvider(cal),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{Name: "demo", Time: job.Time(16, 0), Handler: handler}); err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func TestApp_CalendarProviderIsRequired(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{Name: "demo", Time: job.Time(16, 0), Handler: noopJob}); err != nil {
 		t.Fatal(err)
@@ -138,6 +140,7 @@ func TestApp_CalendarProviderFailureFailsTheRun(t *testing.T) {
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
 		app.WithCalendarProvider(cal),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{Name: "demo", Time: job.Time(16, 0), Handler: noopJob}); err != nil {
 		t.Fatal(err)
@@ -174,6 +177,7 @@ func TestApp_TradingDayOverrideTradesOnACalendarClosedDay(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "demo", Time: job.AtClose(),
@@ -216,6 +220,7 @@ func TestApp_MarketCloseFuncWinsOverTheStandardSession(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "demo", Time: job.AtClose(),

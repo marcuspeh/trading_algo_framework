@@ -1,6 +1,8 @@
 package order
 
 import (
+	"time"
+
 	indicator "github.com/marcuspeh/indicators-go"
 )
 
@@ -89,4 +91,38 @@ type Result struct {
 	Filled    bool
 	FillPrice float64
 	Error     error
+}
+
+// Fill is a fill that happened.
+//
+// A backtest fills an order against a bar and a live broker reports its
+// fills through a webhook, but both describe the same event the same
+// way: an instrument traded a quantity at a price at a time.
+type Fill struct {
+	// Symbol is the instrument that traded.
+	Symbol string
+
+	// Side is the side the fill traded on.
+	Side Side
+
+	// Quantity is how much filled, in shares.
+	Quantity float64
+
+	// Price is the price it filled at.
+	Price float64
+
+	// Time is when it filled. A backtest knows the session it filled
+	// in; a live fill is stamped when the broker reported it.
+	Time time.Time
+
+	// Commission is what the broker charged for it.
+	Commission float64
+}
+
+// FillSink receives the fills of a run.
+//
+// It is optional everywhere it appears: a run nobody is watching still
+// trades.
+type FillSink interface {
+	OnFill(f Fill)
 }

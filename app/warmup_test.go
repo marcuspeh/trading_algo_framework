@@ -26,6 +26,18 @@ func (m *recordingMkt) Bars(_ context.Context, _ string, lookback int, asOf time
 	return bars, nil
 }
 
+func (m *recordingMkt) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 // The warmup primes the Context's bar cache, and the cache is keyed by
 // the session the bars were fetched for. The first job of the first day
 // reads the same session, so it must be served from the cache rather
@@ -46,6 +58,7 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 		app.WithMarketClient(m),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 5); err != nil {
 		t.Fatal(err)
@@ -53,7 +66,7 @@ func TestApp_WarmupIsReusedByTheFirstJob(t *testing.T) {
 	if err := a.RegisterJob(job.Job{
 		Name: "j", Time: job.Time(16, 0),
 		Handler: func(ctx job.Context, _ time.Time) ([]order.Order, error) {
-			_, _ = ctx.Bars("AAPL", 5)
+			_, _ = ctx.Bars([]string{"AAPL"}, 5)
 			return nil, nil
 		},
 	}); err != nil {
@@ -95,6 +108,7 @@ func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
 		app.WithMarketClient(m),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 5); err != nil {
 		t.Fatal(err)
@@ -102,7 +116,7 @@ func TestApp_WarmupSurvivesJobsOnBothSidesOfTheClose(t *testing.T) {
 
 	read := func(name string) job.Handler {
 		return func(ctx job.Context, _ time.Time) ([]order.Order, error) {
-			_, _ = ctx.Bars("AAPL", 5)
+			_, _ = ctx.Bars([]string{"AAPL"}, 5)
 			return nil, nil
 		}
 	}

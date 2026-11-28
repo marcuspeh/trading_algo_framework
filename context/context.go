@@ -6,7 +6,6 @@ package context
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -100,48 +99,106 @@ func (c *ctx) Mode() job.Mode {
 	return c.mode
 }
 
-// Bars returns the most recent bars for a symbol, ending on the
-// session the clock is anchored to.
+// Bars returns the most recent bars for each of the symbols, ending on
+// the session the clock is anchored to.
 //
 // The anchor is the most recent session whose close has passed, so a
 // job that fires before the close reads the previous session and a job
 // that fires at or after the close reads the current one. A strategy
 // can never see a bar that had not been printed yet.
 //
-// A request for more bars than the service has returns
-// job.ErrInsufficientBars rather than a short history, so an
-// indicator is never silently computed over fewer bars than asked for.
-func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
+// The symbols are fetched in one batch request. The market-data-service
+// answers a batch by fetching its symbols concurrently, so a strategy
+// that reads the history of a whole universe pays for it in one round
+// trip rather than one request per name.
+//
+// A symbol with less history than was asked for - or with none at all
+// - is left out of the map, so an indicator is never silently computed
+// over fewer bars than asked for. The error is for a request the
+// framework could not make at all: an empty list of symbols, a
+// lookback that is not positive, or a blank symbol.
+func (c *ctx) Bars(symbols []string, lookback int) (map[string][]order.Bar, error) {
+	if len(symbols) == 0 {
+		return nil, errInvalid("symbols are required")
+	}
 	if lookback <= 0 {
 		return nil, errInvalid("lookback must be > 0")
 	}
-	if symbol == "" {
-		return nil, errInvalid("symbol is required")
+	for _, symbol := range symbols {
+		if symbol == "" {
+			return nil, errInvalid("symbol is required")
+		}
 	}
 
 	asOf := c.session.Anchor(c.clock.Now())
 
-	c.barCacheMu.Lock()
-	cached, ok := c.barCache[symbol][sessionKey(asOf)]
-	c.barCacheMu.Unlock()
+	out := make(map[string][]order.Bar, len(symbols))
 
-	// A cached entry is reusable when it was fetched for the same
-	// session and holds at least as many bars as were asked for.
-	// Anything else - a different session, or a shorter history than
-	// requested - needs a fresh fetch.
-	if ok && sameDate(cached.asOf, asOf) && len(cached.bars) >= lookback {
-		return cloneBars(cached.bars[len(cached.bars)-lookback:]), nil
+	// A symbol asked for twice is fetched once, and a symbol already
+	// read for this session is served from the cache.
+	var need []string
+	seen := make(map[string]bool, len(symbols))
+	for _, symbol := range symbols {
+		if seen[symbol] {
+			continue
+		}
+		seen[symbol] = true
+
+		if bars, ok := c.cachedBars(symbol, lookback, asOf); ok {
+			out[symbol] = bars
+			continue
+		}
+		need = append(need, symbol)
+	}
+	if len(need) == 0 {
+		return out, nil
 	}
 
-	bars, err := c.market.Bars(context.Background(), symbol, lookback, asOf)
+	fetched, err := c.market.BarsBatch(context.Background(), need, lookback, asOf)
 	if err != nil {
 		return nil, err
 	}
 
-	sort.SliceStable(bars, func(i, j int) bool {
-		return bars[i].Timestamp.Before(bars[j].Timestamp)
-	})
+	for symbol, bars := range fetched {
+		if !seen[symbol] {
+			continue
+		}
+		sort.SliceStable(bars, func(i, j int) bool {
+			return bars[i].Timestamp.Before(bars[j].Timestamp)
+		})
+		c.storeBars(symbol, asOf, bars)
 
+		if len(bars) < lookback {
+			// The symbol has a shorter history than was asked for, so
+			// it is left out rather than silently computed over fewer
+			// bars than asked for.
+			continue
+		}
+		out[symbol] = cloneBars(bars[len(bars)-lookback:])
+	}
+
+	return out, nil
+}
+
+// cachedBars returns the bars cached for a symbol and session.
+//
+// A cached entry is reusable when it was fetched for the same session
+// and holds at least as many bars as were asked for. Anything else - a
+// different session, or a shorter history than requested - needs a
+// fresh fetch.
+func (c *ctx) cachedBars(symbol string, lookback int, asOf time.Time) ([]order.Bar, bool) {
+	c.barCacheMu.Lock()
+	cached, ok := c.barCache[symbol][sessionKey(asOf)]
+	c.barCacheMu.Unlock()
+
+	if !ok || !sameDate(cached.asOf, asOf) || len(cached.bars) < lookback {
+		return nil, false
+	}
+	return cloneBars(cached.bars[len(cached.bars)-lookback:]), true
+}
+
+// storeBars caches the bars fetched for a symbol and session.
+func (c *ctx) storeBars(symbol string, asOf time.Time, bars []order.Bar) {
 	c.barCacheMu.Lock()
 	if c.barCache[symbol] == nil {
 		c.barCache[symbol] = map[string]barCacheEntry{}
@@ -156,15 +213,6 @@ func (c *ctx) Bars(symbol string, lookback int) ([]order.Bar, error) {
 		}
 	}
 	c.barCacheMu.Unlock()
-
-	if len(bars) < lookback {
-		return nil, fmt.Errorf("%w: %s has %d bars, %d requested",
-			job.ErrInsufficientBars, symbol, len(bars), lookback)
-	}
-	if len(bars) > lookback {
-		bars = bars[len(bars)-lookback:]
-	}
-	return cloneBars(bars), nil
 }
 
 func (c *ctx) Constituents(etf string) ([]string, error) {

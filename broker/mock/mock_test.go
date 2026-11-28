@@ -2,6 +2,7 @@ package mock_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -545,4 +546,100 @@ func TestMock_NewAcceptsACalendar(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected a mock")
 	}
+}
+
+// A fill is logged when it happens - not only when the order was
+// submitted. A limit order rests for a session or more, so the fill
+// is nowhere near the submission.
+func TestMock_AFillIsLogged(t *testing.T) {
+	at := time.Date(2024, 1, 3, 9, 0, 0, 0, calendar.NYSE)
+	p := portfolio.NewBacktest(10_000)
+	log := &captureLogger{}
+	m := mock.New(mock.Config{
+		Portfolio: p,
+		Bars: bars{
+			"2024-01-03": {Timestamp: day(2024, 1, 3), Open: 100, High: 110, Low: 90, Close: 105},
+		},
+		Session: session(t, at),
+		Logger:  log,
+	})
+
+	limit := 95.0
+	if _, err := m.PlaceLimitOrder(context.Background(), broker.LimitOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+		LmtPrice: limit,
+		TIF:      "GTC",
+	}, "key-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The order has only been submitted; it has not filled yet.
+	if len(log.lines) != 0 {
+		t.Fatalf("the submission was logged as a fill: %v", log.lines)
+	}
+
+	m.AdvanceSession(day(2024, 1, 3))
+	if len(log.lines) != 1 {
+		t.Fatalf("fill log lines=%d want 1: %v", len(log.lines), log.lines)
+	}
+	for _, want := range []string{"order filled", "symbol=AAPL", "side=BUY", "qty=10", "price=95", "session=2024-01-03"} {
+		if !strings.Contains(log.lines[0], want) {
+			t.Errorf("fill log = %q want it to contain %q", log.lines[0], want)
+		}
+	}
+}
+
+// A market order fills at the submission, so its fill is logged too.
+func TestMock_AMarketFillIsLogged(t *testing.T) {
+	at := time.Date(2024, 1, 3, 16, 0, 0, 0, calendar.NYSE)
+	p := portfolio.NewBacktest(10_000)
+	log := &captureLogger{}
+	m := mock.New(mock.Config{
+		Portfolio: p,
+		Bars: bars{
+			"2024-01-03": {Timestamp: day(2024, 1, 3), Open: 100, High: 210, Low: 195, Close: 205},
+		},
+		Session: session(t, at),
+		Logger:  log,
+	})
+
+	if _, err := m.PlaceMarketOrder(context.Background(), broker.MarketOrderRequest{
+		OrderRequest: broker.OrderRequest{
+			Contract:      broker.Contract{Symbol: "AAPL"},
+			Action:        "BUY",
+			TotalQuantity: 10,
+		},
+	}, "key-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(log.lines) != 1 {
+		t.Fatalf("fill log lines=%d want 1: %v", len(log.lines), log.lines)
+	}
+	for _, want := range []string{"order filled", "symbol=AAPL", "price=205", "session=2024-01-03"} {
+		if !strings.Contains(log.lines[0], want) {
+			t.Errorf("fill log = %q want it to contain %q", log.lines[0], want)
+		}
+	}
+}
+
+// captureLogger keeps the lines it is given.
+type captureLogger struct {
+	lines []string
+}
+
+func (l *captureLogger) Info(msg string, fields ...any) {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(fields); i += 2 {
+		b.WriteString(" ")
+		b.WriteString(fmt.Sprint(fields[i]))
+		b.WriteString("=")
+		b.WriteString(fmt.Sprint(fields[i+1]))
+	}
+	l.lines = append(l.lines, b.String())
 }

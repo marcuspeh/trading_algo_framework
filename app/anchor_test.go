@@ -55,11 +55,11 @@ func TestApp_JobSeesTheSessionItShould(t *testing.T) {
 				// Only the first day is of interest here.
 				return nil, nil
 			}
-			got, err := ctx.Bars("AAPL", 1)
+			bars, err := ctx.Bars([]string{"AAPL"}, 1)
 			if err != nil {
 				return nil, err
 			}
-			seen[name] = sessionOf(got)
+			seen[name] = sessionOf(bars["AAPL"])
 			return nil, nil
 		}
 	}
@@ -74,6 +74,7 @@ func TestApp_JobSeesTheSessionItShould(t *testing.T) {
 		app.WithMarketClient(clients.NewStaticBars(bars)),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "preopen", Time: job.Time(7, 30), Handler: record("preopen"),

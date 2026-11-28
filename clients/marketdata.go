@@ -21,10 +21,18 @@ import (
 // service would hang the caller indefinitely.
 const DefaultMarketTimeout = 30 * time.Second
 
+// maxBatchTimeout caps the deadline a batch request is given.
+//
+// The service answers a batch by fetching its symbols a few at a time,
+// so a batch of a whole universe takes far longer than a single
+// symbol's worth of deadline.
+const maxBatchTimeout = 10 * time.Minute
+
 // MarketSource is the subset of marketdata.Client functionality the
-// market adapter needs. It mirrors the SDK's two public methods.
+// market adapter needs. It mirrors the SDK's three public methods.
 type MarketSource interface {
 	GetBars(ctx context.Context, ticker string, from, to time.Time) (*marketdata.BarsResponse, error)
+	GetBarsBatch(ctx context.Context, symbols []string, from, to time.Time) (*marketdata.BatchBarsResponse, error)
 	GetConstituents(ctx context.Context, symbol string, date time.Time) (*marketdata.ConstituentResponse, error)
 }
 
@@ -104,25 +112,124 @@ func (m *Market) Bars(ctx context.Context, symbol string, lookback int, asOf tim
 	if err != nil {
 		return nil, err
 	}
-	if len(bars) == 0 {
-		return nil, job.ErrNotFound
-	}
 
 	// Trim to the most recent `lookback` bars at or before asOf.
-	end := len(bars)
-	for end > 0 && bars[end-1].Timestamp.After(to) {
-		end--
-	}
-	if end == 0 {
+	out := trimBars(bars, lookback, to)
+	if len(out) == 0 {
 		return nil, job.ErrNotFound
 	}
-	start := end - lookback
-	if start < 0 {
-		start = 0
-	}
-	out := make([]order.Bar, end-start)
-	copy(out, bars[start:end])
 	return out, nil
+}
+
+// BarsBatch fetches up to `lookback` bars for each of the symbols.
+//
+// The symbols share the window the calendar gives for `lookback`
+// sessions ending on or before asOf, so they are asked for in one
+// request rather than one request each.
+//
+// A symbol the service could not serve is left out of the map, as is
+// one with less history than was asked for.
+func (m *Market) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	if m.client == nil {
+		return nil, fmt.Errorf("market adapter: nil market-data client")
+	}
+	if lookback <= 0 {
+		return nil, fmt.Errorf("market adapter: lookback must be > 0")
+	}
+	if len(symbols) == 0 {
+		return nil, fmt.Errorf("market adapter: symbols are required")
+	}
+	for _, symbol := range symbols {
+		if symbol == "" {
+			return nil, fmt.Errorf("market adapter: symbol is required")
+		}
+	}
+
+	from, to, err := m.windowFor(lookback, asOf)
+	if err != nil {
+		return nil, err
+	}
+
+	// The symbols are grouped by the window they still need: one the
+	// cache already covers needs no request, and the rest usually share
+	// a single window.
+	groups := map[barWindow][]string{}
+	var covered []string
+	for _, symbol := range symbols {
+		needFrom, needTo := m.neededWindow(symbol, from, to)
+		if needFrom.After(needTo) {
+			covered = append(covered, symbol)
+			continue
+		}
+		w := barWindow{from: needFrom, to: needTo}
+		groups[w] = append(groups[w], symbol)
+	}
+
+	out := make(map[string][]order.Bar, len(symbols))
+	for w, group := range groups {
+		ctx, cancel := context.WithTimeout(ctx, m.batchTimeout(len(group)))
+		resp, err := m.client.GetBarsBatch(ctx, group, w.from, w.to)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range resp.Results {
+			symbol := requestedSymbol(group, r.Ticker)
+			if symbol == "" {
+				continue
+			}
+			bars := m.store(symbol, toBars(symbol, r.Bars), w.from)
+			trimmed := trimBars(bars, lookback, to)
+			if len(trimmed) == 0 {
+				continue
+			}
+			out[symbol] = trimmed
+		}
+	}
+
+	// The symbols the cache already covers are served from it.
+	for _, symbol := range covered {
+		m.mu.Lock()
+		cached := m.cache[symbol]
+		m.mu.Unlock()
+		trimmed := trimBars(cached, lookback, to)
+		if len(trimmed) == 0 {
+			continue
+		}
+		out[symbol] = trimmed
+	}
+
+	return out, nil
+}
+
+// barWindow is the range of dates a request covers.
+type barWindow struct {
+	from time.Time
+	to   time.Time
+}
+
+// batchTimeout returns the deadline a batch of the given size is given.
+//
+// The deadline scales with the size of the batch: the service answers a
+// batch by fetching its symbols a few at a time, so a batch of a whole
+// universe needs more time than a single symbol's worth.
+func (m *Market) batchTimeout(size int) time.Duration {
+	d := m.timeout * time.Duration(size)
+	if d > maxBatchTimeout {
+		return maxBatchTimeout
+	}
+	return d
+}
+
+// requestedSymbol finds the symbol the caller asked for that the
+// service answered under its own spelling of the ticker.
+func requestedSymbol(group []string, ticker string) string {
+	for _, symbol := range group {
+		if strings.EqualFold(symbol, ticker) {
+			return symbol
+		}
+	}
+	return ""
 }
 
 // Bar returns the bar for a symbol on the given date.
@@ -162,30 +269,10 @@ func (m *Market) Bar(symbol string, date time.Time) (order.Bar, bool) {
 //
 // The caller must not hold the lock.
 func (m *Market) barsIn(ctx context.Context, symbol string, from, to time.Time) ([]order.Bar, error) {
-	m.mu.Lock()
-	cached, entry := m.cache[symbol], m.coverage[symbol]
-	m.mu.Unlock()
-
 	// Only the part of the window the service has not already been
 	// asked about is fetched. A backtest advancing one day at a time
 	// therefore costs one bar per day rather than a whole window.
-	needFrom, needTo := from, to
-	switch {
-	case entry == nil:
-		// Nothing cached.
-	case !entry.from.After(from) && !entry.to.Before(to):
-		// The service has already answered for this whole window.
-		needFrom, needTo = to.AddDate(0, 0, 1), to
-	case entry.from.After(from) && entry.to.Before(to):
-		// The window straddles the cache: refetch it whole.
-	case entry.from.After(from):
-		// The request reaches further back than the cache does.
-		needFrom, needTo = from, entry.from.AddDate(0, 0, -1)
-	default:
-		// The cache covers the start of the window; only the tail is
-		// missing.
-		needFrom, needTo = entry.to.AddDate(0, 0, 1), to
-	}
+	needFrom, needTo := m.neededWindow(symbol, from, to)
 
 	var fetched []order.Bar
 	if !needFrom.After(needTo) {
@@ -196,21 +283,49 @@ func (m *Market) barsIn(ctx context.Context, symbol string, from, to time.Time) 
 		if err != nil {
 			return nil, err
 		}
-		fetched = make([]order.Bar, 0, len(resp.Bars))
-		for _, b := range resp.Bars {
-			fetched = append(fetched, order.Bar{
-				Symbol: symbol,
-				// The service stamps daily bars at NYSE midnight, so
-				// the bar's calendar date is its trading day.
-				Timestamp: time.UnixMilli(b.Timestamp).In(clock.NYSE),
-				Open:      b.Open,
-				High:      b.High,
-				Low:       b.Low,
-				Close:     b.Close,
-				Volume:    b.Volume,
-			})
-		}
+		fetched = toBars(symbol, resp.Bars)
 	}
+
+	return m.store(symbol, fetched, needFrom), nil
+}
+
+// neededWindow returns the range that still has to be fetched for a
+// symbol: the part of [from, to] the service has not answered for
+// yet.
+//
+// A range whose start is after its end means the cache covers the
+// window already and nothing has to be fetched.
+func (m *Market) neededWindow(symbol string, from, to time.Time) (time.Time, time.Time) {
+	m.mu.Lock()
+	entry := m.coverage[symbol]
+	m.mu.Unlock()
+
+	switch {
+	case entry == nil:
+		// Nothing cached.
+		return from, to
+	case !entry.from.After(from) && !entry.to.Before(to):
+		// The service has already answered for this whole window.
+		return to.AddDate(0, 0, 1), to
+	case entry.from.After(from) && entry.to.Before(to):
+		// The window straddles the cache: refetch it whole.
+		return from, to
+	case entry.from.After(from):
+		// The request reaches further back than the cache does.
+		return from, entry.from.AddDate(0, 0, -1)
+	default:
+		// The cache covers the start of the window; only the tail is
+		// missing.
+		return entry.to.AddDate(0, 0, 1), to
+	}
+}
+
+// store merges the freshly fetched bars into the cache for a symbol and
+// returns the merged series.
+func (m *Market) store(symbol string, fetched []order.Bar, needFrom time.Time) []order.Bar {
+	m.mu.Lock()
+	cached, entry := m.cache[symbol], m.coverage[symbol]
+	m.mu.Unlock()
 
 	merged := mergeBars(cached, fetched)
 
@@ -233,7 +348,44 @@ func (m *Market) barsIn(ctx context.Context, symbol string, from, to time.Time) 
 	}
 	m.mu.Unlock()
 
-	return merged, nil
+	return merged
+}
+
+// toBars converts the service's bars into the framework's.
+func toBars(symbol string, bars []marketdata.Bar) []order.Bar {
+	out := make([]order.Bar, 0, len(bars))
+	for _, b := range bars {
+		out = append(out, order.Bar{
+			Symbol: symbol,
+			// The service stamps daily bars at NYSE midnight, so
+			// the bar's calendar date is its trading day.
+			Timestamp: time.UnixMilli(b.Timestamp).In(clock.NYSE),
+			Open:      b.Open,
+			High:      b.High,
+			Low:       b.Low,
+			Close:     b.Close,
+			Volume:    b.Volume,
+		})
+	}
+	return out
+}
+
+// trimBars returns the most recent `lookback` bars at or before `to`.
+func trimBars(bars []order.Bar, lookback int, to time.Time) []order.Bar {
+	end := len(bars)
+	for end > 0 && bars[end-1].Timestamp.After(to) {
+		end--
+	}
+	if end == 0 {
+		return nil
+	}
+	start := end - lookback
+	if start < 0 {
+		start = 0
+	}
+	out := make([]order.Bar, end-start)
+	copy(out, bars[start:end])
+	return out
 }
 
 // coverage records the range of dates the service has been asked

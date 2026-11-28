@@ -70,6 +70,24 @@ func (s *StaticBars) Bars(_ context.Context, symbol string, lookback int, asOf t
 	return out, nil
 }
 
+// BarsBatch returns up to `lookback` bars for each of the symbols.
+//
+// A symbol the store holds no bars for is left out of the map.
+func (s *StaticBars) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	if lookback <= 0 {
+		return nil, fmt.Errorf("static-bars: lookback must be > 0")
+	}
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := s.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 // Bar returns the bar for a symbol on the given date.
 //
 // It lets the in-memory bars serve as a fill model's price source, so

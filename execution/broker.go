@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/marcuspeh/trading-framework/broker"
+	"github.com/marcuspeh/trading-framework/fills"
 	"github.com/marcuspeh/trading-framework/order"
 )
 
@@ -17,11 +18,23 @@ import (
 // once, so both modes send the same thing.
 type Broker struct {
 	client Client
+	fills  *fills.Registry
 }
 
 // NewBroker returns an Executor that submits to the given broker.
 func NewBroker(c Client) *Broker {
 	return &Broker{client: c}
+}
+
+// WithFills remembers the orders the broker places, so the fill a live
+// broker reports later can be named.
+//
+// The registry is optional: without one, the fills of a live run are
+// still reported by the broker, but nothing here ties them to the
+// orders that placed them.
+func (e *Broker) WithFills(reg *fills.Registry) *Broker {
+	e.fills = reg
+	return e
 }
 
 // Client returns the broker the executor submits to.
@@ -78,6 +91,7 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
+		e.record(res.ParentPermId, o)
 		return e.result(res.ParentOrderId), nil
 
 	case o.Type == order.Market:
@@ -88,6 +102,7 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
+		e.record(res.PermId, o)
 		return e.result(res.OrderId), nil
 
 	case o.Type == order.Limit:
@@ -105,11 +120,23 @@ func (e *Broker) Submit(ctx context.Context, o order.Order) (order.Result, error
 		if res == nil {
 			return order.Result{}, fmt.Errorf("executor: nil broker response")
 		}
+		e.record(res.PermId, o)
 		return e.result(res.OrderId), nil
 
 	default:
 		return order.Result{}, fmt.Errorf("executor: unsupported order type")
 	}
+}
+
+// record remembers an order under the broker's permanent id.
+//
+// The id is what the broker's fill report names the order by, so a fill
+// can be logged against the order that filled.
+func (e *Broker) record(permID int, o order.Order) {
+	if e.fills == nil {
+		return
+	}
+	e.fills.Record(permID, o)
 }
 
 // result builds the result of a submission.

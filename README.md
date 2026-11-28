@@ -26,15 +26,16 @@ func rebalance(ctx job.Context, date time.Time) ([]order.Order, error) {
     if err != nil {
         return nil, err
     }
-    bars, err := ctx.Bars(symbols[0], 5)
+    bars, err := ctx.Bars(symbols[:1], 5)
     if err != nil {
         return nil, err
     }
+    series := bars[symbols[0]]
     pos := ctx.Position(symbols[0])
     if pos.Quantity > 0 {
         return nil, nil
     }
-    limit := bars[len(bars)-1].Close
+    limit := series[len(series)-1].Close
     return []order.Order{{
         Symbol:   symbols[0],
         Side:     order.Buy,
@@ -67,7 +68,9 @@ func main() {
 }
 ```
 
-A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy):
+A full runnable example lives in [`examples/simple-strategy`](examples/simple-strategy). It trades the SPY's
+constituents with a moving-average crossover and reads its prices from the market-data-service, so the
+service has to be running:
 
 ```sh
 go run ./examples/simple-strategy
@@ -119,7 +122,7 @@ and live:
 - `Now() time.Time`, `Today() time.Time` — driven by the injected `Clock`, on
   the NYSE (US/Eastern) calendar
 - `Mode() Mode` — `job.ModeBacktest` or `job.ModeLive`
-- `Bars(symbol string, lookback int) ([]order.Bar, error)`
+- `Bars(symbols []string, lookback int) (map[string][]order.Bar, error)`
 - `Constituents(etf string) ([]string, error)`
 - `Position(symbol) order.Position`, `Positions() []order.Position`
 - `Cash() float64`, `PortfolioValue() float64`
@@ -240,20 +243,42 @@ Bars and constituents come from the
 and the backtest's fill model reads its prices from the same adapter - so
 the strategy and the fill model can never see different ones.
 
-`ctx.Bars(symbol, n)` returns an error when the symbol has fewer than `n`
-bars, rather than a short history an indicator would silently be computed
-over:
+`ctx.Bars(symbols, n)` returns the bars of each symbol as a map. A symbol
+with fewer than `n` bars is left out of the map, rather than returned as a
+short history an indicator would silently be computed over:
 
 ```go
-bars, err := ctx.Bars("AAPL", 20)
-if errors.Is(err, job.ErrInsufficientBars) {
+bars, err := ctx.Bars([]string{"AAPL", "MSFT"}, 20)
+if err != nil {
+    return nil, err
+}
+series, ok := bars["AAPL"]
+if !ok {
     // Not enough history yet.
 }
 ```
 
+The symbols are fetched in one batch request. The service answers a batch by
+fetching its symbols a few at a time, so a strategy that reads the history
+of a whole universe pays for one round trip rather than one request per
+name.
+
 The adapter keeps what it has fetched and asks the service only for what is
 missing, so a backtest costs one bar per symbol per day rather than a
 window.
+
+A market client implements `market.Client`, which serves one symbol at a
+time and a set of them at once:
+
+```go
+type Client interface {
+    Bars(ctx context.Context, symbol string, lookback int, asOf time.Time) ([]order.Bar, error)
+    BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error)
+}
+```
+
+`clients.NewMarket` implements it over the SDK; `clients.StaticBars` serves
+bars from memory for tests.
 
 ### Broker
 
@@ -288,6 +313,29 @@ HTTP client, so without one a stalled broker would hang the session.
 A live run checks the broker is connected before it starts, and refreshes
 the portfolio from the broker before every job - so a job that asks what it
 already holds sees what the broker says it holds.
+
+#### Fill reports
+
+A live broker fills asynchronously: the order is acknowledged when it is
+submitted, and the fill arrives later, on a channel of its own. The
+ibkr-proxy pushes those fills to a webhook. The framework can listen for
+them and log each fill as it happens:
+
+```go
+a := app.NewApp(
+    app.WithLive(app.LiveConfig{
+        Broker:       brokerClient,
+        FillWebhook: "127.0.0.1:8000",
+    }),
+    ...
+)
+```
+
+The proxy's `WEBHOOK_URL` has to point at it: the proxy posts to
+`{WEBHOOK_URL}/fills`, and its default webhook URL is
+`http://127.0.0.1:8000/webhook`. A fill is logged against the order that
+filled when the framework placed it; a fill for an order it did not place -
+a manual trade, or another client's - is logged as a warning.
 
 ### Orders
 
@@ -393,12 +441,106 @@ Technical-analysis indicators live in their own library, [indicators-go](https:/
 import indicators "github.com/marcuspeh/indicators-go"
 
 sma := indicators.NewSMA(20)
-bars, _ := ctx.Bars("AAPL", 50)
-for i := range bars {
-    sma.Update(&bars[i])
+bars, _ := ctx.Bars([]string{"AAPL"}, 50)
+series := bars["AAPL"]
+for i := range series {
+    sma.Update(&series[i])
 }
 value := sma.Value()
 ```
+
+### Tear sheets
+
+Every run leaves a performance page behind. A backtest writes one file for
+the run; a live run writes one file per trading day.
+
+```text
+tearsheets/backtest-2025-01-01_to-2025-02-01.html
+tearsheets/live-2026-11-26.html
+```
+
+The page is a single self-contained HTML file. It fetches nothing, so it
+opens from disk and travels well. It carries the run's headline numbers
+(total return, CAGR, Sharpe, Sortino, max drawdown, volatility, win rate,
+profit factor, exposure and fees), the portfolio's value at each close,
+the drawdown from its running peak, the return of each month, and every
+closed trade with its profit or loss.
+
+No strategy code is involved: the engines report the portfolio's value
+and the brokers report their fills, and the framework does the rest. Three
+options move it:
+
+```go
+app.WithTearsheetDir("reports")    // where the files go (default "tearsheets")
+app.WithTearsheetCurrency("EUR")   // what the amounts are in (default "USD")
+app.WithStrategyID("momentum")     // what the strategy calls itself
+```
+
+A strategy that names itself gets its files named after it, so two
+strategies can share a directory:
+
+```text
+tearsheets/momentum-backtest-2025-01-01_to-2025-02-01.html
+tearsheets/momentum-live-2026-11-26.html
+```
+
+A live run's daily file holds the run from its start up to that day. The
+file for a day is written when the next day starts, and the file for the
+last day is written when the run stops.
+
+Two things about a live tear sheet are worth knowing. Its value curve is
+sampled when the framework reconciles with the broker - before each job
+and once more when the run stops - so it holds the broker's own net asset
+value at those moments rather than a continuous mark. And its currency is
+the one the strategy says: the framework does not read it from the broker.
+
+### Keeping the history
+
+A tear sheet lives in the process that wrote it, so a live service that
+restarts starts its report from nothing. A store keeps the run's events
+instead, and the service picks them up where it left off:
+
+```go
+store, err := tearsheet.NewSQLiteStore("tearsheets.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer store.Close()
+
+a := app.NewApp(
+    app.WithStrategyID("momentum"),
+    app.WithTearsheetStore(store),
+    // ...
+)
+```
+
+The store is a SQLite file: no server, and it survives the process that
+wrote it. On startup the run's history is loaded back, so a service that
+restarts carries on with the curve it had rather than beginning again.
+The closed trades are rebuilt from the stored fills, so they are matched
+the same way the run that recorded them matched them.
+
+A store needs a strategy id. It holds the history of one strategy's runs,
+and without an id there is no telling whose history it is. The id is also
+what keys the stored runs: a live run is one run of the strategy, so it
+keeps the same key however often the service restarts, while a backtest's
+key carries its window, so the same window can be run again without
+disturbing the last run.
+
+The store is an interface, so the history can live somewhere else:
+
+```go
+type Store interface {
+    Save(ctx context.Context, key string, run Run, evts Events) error
+    Load(ctx context.Context, key string) (Run, Events, error)
+    Runs(ctx context.Context, strategy string) ([]Run, error)
+}
+```
+
+What is stored is the run's raw events - the portfolio's value at each
+sample and the fills that moved it. The closed trades and the numbers on
+the page are derived from them, which is why a loaded run reads the same
+as the run that recorded it.
 
 ## Package layout
 
@@ -416,6 +558,7 @@ trading-framework/
 ├── context/     # Context implementation
 ├── examples/    # simple-strategy
 ├── execution/   # Executor + order translation + reconciler
+├── fills/       # live fill webhook receiver
 ├── job/         # Job, Slot, Handler, Context
 ├── live/        # live engine loop
 ├── logging/     # text logger
@@ -425,6 +568,7 @@ trading-framework/
 ├── portfolio/   # Portfolio interface + Backtest/Live
 ├── risk/        # risk.Manager (Basic implementation)
 ├── scheduler/   # Scheduler interface + Backtest/Real
+├── tearsheet/   # performance page: metrics + HTML renderer
 └── universe/    # universe.Client interface
 ```
 
@@ -436,6 +580,9 @@ trading-framework/
 - Live positions are refreshed from the broker before each job, so a
   position that appears between two jobs is not visible until the next
   one.
+- A live fill is named after the order the framework placed. A bracket's
+  exit legs are reported by the reference their entry carried, so they
+  are named only when the strategy gave its orders an id.
 - Live cash is derived from the net asset value and the position marks,
   which are daily closes. It drifts from the broker's own cash during a
   session, and it is unknown rather than wrong when a position has no

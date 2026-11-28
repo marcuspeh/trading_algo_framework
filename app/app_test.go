@@ -17,6 +17,14 @@ func (fakeMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) ([]order
 	return nil, nil
 }
 
+func (fakeMarket) BarsBatch(_ context.Context, symbols []string, _ int, _ time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		out[symbol] = nil
+	}
+	return out, nil
+}
+
 type fakeUniverse struct{}
 
 func (fakeUniverse) Constituents(_ context.Context, _ string, _ time.Time) ([]string, error) {
@@ -53,6 +61,7 @@ func TestApp_BacktestEndToEnd(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "demo", Time: job.Time(16, 0), Handler: noopJob,
@@ -71,6 +80,7 @@ func TestApp_LiveRequiresBroker(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	a.RegisterJob(job.Job{Name: "x", Time: job.Time(9, 0), Handler: noopJob})
 	if err := a.Run(); err == nil {
@@ -125,6 +135,7 @@ func TestApp_BacktestContextReportsBacktestMode(t *testing.T) {
 		app.WithMarketClient(fakeMarket{}),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{Name: "demo", Time: job.Time(16, 0), Handler: handler}); err != nil {
 		t.Fatal(err)
@@ -152,6 +163,7 @@ func TestApp_WarmupFetchesHistory(t *testing.T) {
 		app.WithMarketClient(mkt),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.AddWarmup("AAPL", 20); err != nil {
 		t.Fatal(err)
@@ -176,4 +188,16 @@ func (c *countingMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) (
 	return []order.Bar{
 		{Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Close: 100},
 	}, nil
+}
+
+func (c *countingMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := c.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
 }

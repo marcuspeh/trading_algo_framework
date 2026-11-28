@@ -2,6 +2,7 @@ package context_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,18 @@ type fakeMarket struct {
 func (f *fakeMarket) Bars(_ context.Context, _ string, _ int, asOf time.Time) ([]order.Bar, error) {
 	f.asOf = asOf
 	return f.bars, nil
+}
+
+func (f *fakeMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := f.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
 }
 
 type fakeUniverse struct {
@@ -45,7 +58,7 @@ func (fakeConfig) Get(string) (string, error) { return "", nil }
 func newCtx(t *testing.T, mkt *fakeMarket, uni *fakeUniverse, today time.Time) (interface {
 	Today() time.Time
 	Now() time.Time
-	Bars(string, int) ([]order.Bar, error)
+	Bars([]string, int) (map[string][]order.Bar, error)
 	Constituents(string) ([]string, error)
 	IsTradingDay(time.Time) bool
 }, error) {
@@ -107,7 +120,7 @@ func TestContext_BarsUsesTheSessionAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = c.Bars("AAPL", 5)
+	_, _ = c.Bars([]string{"AAPL"}, 5)
 	want := time.Date(2023, 12, 29, 0, 0, 0, 0, clock.NYSE)
 	if !mkt.asOf.Equal(want) {
 		t.Fatalf("Bars asOf=%v want %v", mkt.asOf, want)
@@ -122,7 +135,7 @@ func TestContext_BarsAfterTheCloseUsesTheCurrentSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = c.Bars("AAPL", 5)
+	_, _ = c.Bars([]string{"AAPL"}, 5)
 	want := time.Date(2024, 1, 2, 0, 0, 0, 0, clock.NYSE)
 	if !mkt.asOf.Equal(want) {
 		t.Fatalf("Bars asOf=%v want %v", mkt.asOf, want)
@@ -161,6 +174,18 @@ func (m *countingMarket) Bars(_ context.Context, _ string, _ int, _ time.Time) (
 	return m.bars, nil
 }
 
+func (m *countingMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
 // The Context caches bars per symbol per day. Repeated calls on the same
 // day must be served from the cache rather than re-fetching.
 //
@@ -186,7 +211,7 @@ func TestContext_BarsCachedWithinDay(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, err := c.Bars("AAPL", 1); err != nil {
+		if _, err := c.Bars([]string{"AAPL"}, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -213,11 +238,11 @@ func TestContext_BarsNotCachedAcrossDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Bars("AAPL", 1); err != nil {
+	if _, err := c.Bars([]string{"AAPL"}, 1); err != nil {
 		t.Fatal(err)
 	}
 	clk.t = time.Date(2024, 1, 11, 0, 0, 0, 0, time.UTC)
-	if _, err := c.Bars("AAPL", 1); err != nil {
+	if _, err := c.Bars([]string{"AAPL"}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if mkt.calls != 2 {
@@ -286,5 +311,170 @@ func TestContext_ExplicitModeIsUsed(t *testing.T) {
 	}
 	if got := c.Mode(); got != job.ModeLive {
 		t.Fatalf("Mode()=%q want %q", got, job.ModeLive)
+	}
+}
+
+// batchMarket serves bars per symbol and counts the calls per symbol.
+//
+// The counts are kept under a lock, because the Context fetches the
+// symbols of a batch concurrently.
+type batchMarket struct {
+	mu      sync.Mutex
+	calls   map[string]int
+	batches int
+	bars    map[string][]order.Bar
+	errs    map[string]error
+}
+
+func (m *batchMarket) Bars(_ context.Context, symbol string, _ int, _ time.Time) ([]order.Bar, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.calls == nil {
+		m.calls = map[string]int{}
+	}
+	m.calls[symbol]++
+	if err, ok := m.errs[symbol]; ok {
+		return nil, err
+	}
+	return m.bars[symbol], nil
+}
+
+func (m *batchMarket) BarsBatch(ctx context.Context, symbols []string, lookback int, asOf time.Time) (map[string][]order.Bar, error) {
+	m.mu.Lock()
+	m.batches++
+	m.mu.Unlock()
+	out := make(map[string][]order.Bar, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := m.Bars(ctx, symbol, lookback, asOf)
+		if err != nil {
+			continue
+		}
+		out[symbol] = bars
+	}
+	return out, nil
+}
+
+func (m *batchMarket) batchCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.batches
+}
+
+func (m *batchMarket) callCount(symbol string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls[symbol]
+}
+
+// newBatchCtx builds a Context over a market that serves the symbols.
+func newBatchCtx(t *testing.T, mkt *batchMarket) job.Context {
+	t.Helper()
+	c, err := tfcontext.New(tfcontext.Options{
+		Calendar:  published.New(),
+		Clock:     &backtestClock{t: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)},
+		Portfolio: fakePortfolio{},
+		Market:    mkt,
+		Universe:  &fakeUniverse{},
+		Config:    fakeConfig{},
+		Logger:    nopLogger{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// A batch of symbols comes back as a map of the symbols the market
+// served.
+func TestContext_BarsReturnsEverySymbolItServed(t *testing.T) {
+	mkt := &batchMarket{bars: map[string][]order.Bar{
+		"AAPL": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100}},
+		"MSFT": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 200}},
+	}}
+	c := newBatchCtx(t, mkt)
+
+	got, err := c.Bars([]string{"AAPL", "MSFT"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Bars returned %d symbols, want 2", len(got))
+	}
+	if len(got["AAPL"]) != 1 || got["AAPL"][0].Close != 100 {
+		t.Fatalf("AAPL bars=%v", got["AAPL"])
+	}
+	if len(got["MSFT"]) != 1 || got["MSFT"][0].Close != 200 {
+		t.Fatalf("MSFT bars=%v", got["MSFT"])
+	}
+}
+
+// A symbol the market cannot serve is left out of the map rather than
+// failing the whole batch: one name without history does not stop the
+// others.
+func TestContext_BarsLeavesOutASymbolTheMarketCannotServe(t *testing.T) {
+	mkt := &batchMarket{
+		bars: map[string][]order.Bar{
+			"AAPL": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100}},
+		},
+		errs: map[string]error{"MSFT": job.ErrNotFound},
+	}
+	c := newBatchCtx(t, mkt)
+
+	got, err := c.Bars([]string{"AAPL", "MSFT"}, 1)
+	if err != nil {
+		t.Fatalf("Bars returned an error for one bad symbol: %v", err)
+	}
+	if _, ok := got["MSFT"]; ok {
+		t.Fatal("MSFT should not be in the map")
+	}
+	if _, ok := got["AAPL"]; !ok {
+		t.Fatal("AAPL should be in the map")
+	}
+}
+
+// The symbols are asked for in one batch request, so a strategy that
+// reads a whole universe pays for one round trip rather than one per
+// name.
+func TestContext_BarsAsksForTheSymbolsInOneBatch(t *testing.T) {
+	mkt := &batchMarket{bars: map[string][]order.Bar{
+		"AAPL": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100}},
+		"MSFT": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 200}},
+	}}
+	c := newBatchCtx(t, mkt)
+
+	if _, err := c.Bars([]string{"AAPL", "MSFT"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := mkt.batchCalls(); n != 1 {
+		t.Fatalf("the market client was asked %d times, want 1", n)
+	}
+}
+
+// A symbol asked for twice is fetched once.
+func TestContext_BarsFetchesASymbolOnce(t *testing.T) {
+	mkt := &batchMarket{bars: map[string][]order.Bar{
+		"AAPL": {{Timestamp: time.Date(2024, 1, 9, 0, 0, 0, 0, time.UTC), Close: 100}},
+	}}
+	c := newBatchCtx(t, mkt)
+
+	if _, err := c.Bars([]string{"AAPL", "AAPL"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := mkt.callCount("AAPL"); n != 1 {
+		t.Fatalf("market client called %d times for AAPL, want 1", n)
+	}
+}
+
+// A request the framework cannot make is an error.
+func TestContext_BarsRejectsAnEmptyBatch(t *testing.T) {
+	c := newBatchCtx(t, &batchMarket{})
+	if _, err := c.Bars(nil, 1); err == nil {
+		t.Fatal("expected an error for an empty batch")
+	}
+	if _, err := c.Bars([]string{"AAPL"}, 0); err == nil {
+		t.Fatal("expected an error for a lookback of 0")
+	}
+	if _, err := c.Bars([]string{"AAPL", ""}, 1); err == nil {
+		t.Fatal("expected an error for a blank symbol")
 	}
 }

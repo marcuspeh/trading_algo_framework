@@ -82,6 +82,7 @@ func TestApp_GTCOrderRestsUntilItFills(t *testing.T) {
 		app.WithMarketClient(clients.NewStaticBars(bars)),
 		app.WithUniverseClient(fakeUniverse{}),
 		app.WithConfigClient(fakeConfig{}),
+		app.WithTearsheetDir(t.TempDir()),
 	)
 	if err := a.RegisterJob(job.Job{
 		Name: "entry", Time: job.AtClose(), Handler: handler,
